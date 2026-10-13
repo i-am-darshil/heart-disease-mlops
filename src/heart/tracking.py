@@ -48,6 +48,9 @@ def setup(tracking_uri: str | None = None, artifact_dir: Path = MLFLOW_ARTIFACT_
     if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
         mlflow.create_experiment(MLFLOW_EXPERIMENT, artifact_location=artifact_dir.as_uri())
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
+    # MLflow 3's UI opens an untagged experiment on the GenAI "Traces" view, which looks
+    # empty for a classic ML project. Mark it as model development so the Runs table shows.
+    mlflow.set_experiment_tag("mlflow.experimentKind", "custom_model_development")
     return uri
 
 

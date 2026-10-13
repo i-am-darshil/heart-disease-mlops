@@ -99,3 +99,8 @@ def test_model_input_is_float64_for_every_feature():
     X = tracking.model_input(load_processed())
     assert list(X.columns) == FEATURES
     assert all(dtype == "float64" for dtype in X.dtypes)
+
+
+def test_experiment_is_marked_as_classic_ml_so_the_ui_shows_runs(store):
+    experiment = mlflow.get_experiment_by_name(tracking.MLFLOW_EXPERIMENT)
+    assert experiment.tags["mlflow.experimentKind"] == "custom_model_development"
