@@ -62,3 +62,12 @@ CATEGORY_LABELS = {
 }
 
 RANDOM_STATE = 42
+
+# Training
+TEST_SIZE = 0.2  # held-out share, touched once for the final estimate
+CV_FOLDS = 5
+# Screening goal: catch at least this share of true disease cases. The decision
+# threshold is lowered from 0.5 until cross-validated recall reaches it.
+TARGET_RECALL = 0.90
+# Quality gate: training (and CI) fails if the selected model's CV ROC-AUC is below this
+MIN_CV_ROC_AUC = 0.85

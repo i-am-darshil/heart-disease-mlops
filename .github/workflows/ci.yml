@@ -1,4 +1,4 @@
-# CI pipeline. Grows phase by phase: lint + test now; train, docker, deploy jobs come later.
+# CI pipeline. Grows phase by phase: lint -> test -> train now; docker and deploy come later.
 name: CI
 
 on:
@@ -39,3 +39,24 @@ jobs:
           path: |
             reports/junit.xml
             coverage.xml
+
+  train:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt && pip install -e .
+      # Exits non-zero if the quality gate fails, which fails this job and the whole run
+      - run: python -m heart.train
+      - name: Upload model and evaluation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-${{ github.sha }}
+          path: |
+            models/model.joblib
+            models/metrics.json
+            reports/figures/model_*.png

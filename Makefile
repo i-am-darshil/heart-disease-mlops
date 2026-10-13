@@ -7,7 +7,7 @@ BIN     := $(VENV)/bin
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup data eda notebook lint format test clean
+.PHONY: help setup data eda notebook train lint format test clean
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -25,8 +25,12 @@ data:  ## Download the raw UCI file (checksum-verified) and write the cleaned CS
 eda:  ## Regenerate EDA figures into reports/figures/
 	$(BIN)/python -m heart.eda
 
-notebook:  ## Re-execute the EDA notebook in place (refreshes its outputs)
+notebook:  ## Re-execute the notebooks in place (refreshes their outputs)
 	$(BIN)/jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
+	$(BIN)/jupyter nbconvert --to notebook --execute --inplace notebooks/02_modelling.ipynb
+
+train:  ## Tune all models, select one, apply quality gate, save models/ + figures
+	$(BIN)/python -m heart.train
 
 lint:  ## Check code style and common bugs (fails on any issue)
 	$(BIN)/ruff check .
