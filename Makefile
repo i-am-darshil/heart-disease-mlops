@@ -1,0 +1,34 @@
+# Single entry point for every task. Run `make help` to list targets.
+# Each target is exactly what CI runs, so "works on my machine" == "works in CI".
+
+PYTHON  ?= python3.11
+VENV    := .venv
+BIN     := $(VENV)/bin
+
+.DEFAULT_GOAL := help
+
+.PHONY: help setup lint format test clean
+
+help:  ## Show available targets
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+
+setup:  ## Create venv and install all dependencies + this package (editable)
+	$(PYTHON) -m venv $(VENV)
+	$(BIN)/pip install --upgrade pip
+	$(BIN)/pip install -r requirements-dev.txt
+	$(BIN)/pip install -e .
+
+lint:  ## Check code style and common bugs (fails on any issue)
+	$(BIN)/ruff check .
+	$(BIN)/ruff format --check .
+
+format:  ## Auto-fix style issues
+	$(BIN)/ruff check --fix .
+	$(BIN)/ruff format .
+
+test:  ## Run unit tests with coverage
+	$(BIN)/pytest --cov=heart --cov-report=term-missing
+
+clean:  ## Remove caches and build outputs (keeps venv and data)
+	rm -rf .pytest_cache .ruff_cache .coverage coverage.xml htmlcov src/*.egg-info
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +

@@ -1,0 +1,41 @@
+# CI pipeline. Grows phase by phase: lint + test now; train, docker, deploy jobs come later.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install ruff==0.17.0
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    needs: lint  # only runs if lint passed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt && pip install -e .
+      - run: pytest --cov=heart --cov-report=xml --junitxml=reports/junit.xml
+      - name: Upload test reports
+        if: always()  # upload even when tests fail, so the logs are inspectable
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            reports/junit.xml
+            coverage.xml

@@ -1,0 +1,15 @@
+# Runtime dependencies: data processing, training, experiment tracking, serving.
+# Pinned exactly so every machine (laptop, CI runner, Docker) gets identical versions.
+pandas==3.0.6
+numpy==2.4.6
+scikit-learn==1.9.1
+joblib==1.6.0
+mlflow==3.17.0
+matplotlib==3.11.2
+seaborn==0.13.2
+requests==2.34.2
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+prometheus-fastapi-instrumentator==8.1.0
+prometheus_client==0.26.0

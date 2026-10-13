@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# Data: raw downloads are reproducible via scripts/download_data.py; processed CSV is committed
+data/raw/*
+!data/raw/.gitkeep
+
+# Model artifacts are built by the pipeline, never committed
+models/*
+!models/.gitkeep
+
+# MLflow local tracking store
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Test/CI reports
+reports/*.xml
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
