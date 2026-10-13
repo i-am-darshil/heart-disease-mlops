@@ -4,10 +4,13 @@
 PYTHON  ?= python3.11
 VENV    := .venv
 BIN     := $(VENV)/bin
+MLFLOW_PORT ?= 5050
+
+export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup data eda notebook train lint format test clean
+.PHONY: help setup data eda notebook train mlflow-ui lint format test clean
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -29,8 +32,11 @@ notebook:  ## Re-execute the notebooks in place (refreshes their outputs)
 	$(BIN)/jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 	$(BIN)/jupyter nbconvert --to notebook --execute --inplace notebooks/02_modelling.ipynb
 
-train:  ## Tune all models, select one, apply quality gate, save models/ + figures
+train:  ## Tune, select, quality-gate, save models/ + figures, log to MLflow and register
 	$(BIN)/python -m heart.train
+
+mlflow-ui:  ## Open the MLflow UI for the local tracking store (http://127.0.0.1:5050)
+	$(BIN)/mlflow ui --backend-store-uri sqlite:///mlflow.db --port $(MLFLOW_PORT)
 
 lint:  ## Check code style and common bugs (fails on any issue)
 	$(BIN)/ruff check .

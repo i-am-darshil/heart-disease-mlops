@@ -9,8 +9,12 @@ Steps:
 4. Lower the decision threshold until cross-validated recall reaches TARGET_RECALL.
 5. Quality gate: fail (non-zero exit) if the model is too weak, so CI goes red.
 6. Evaluate once on the test set, then save the model, metrics and plots.
+7. Log everything to MLflow; register the model only if the quality gate passed.
+
+    python -m heart.train --no-mlflow   # skip tracking (e.g. a quick local check)
 """
 
+import argparse
 import json
 import sys
 from dataclasses import dataclass
@@ -213,7 +217,11 @@ def save_outputs(result: TrainingResult, models_dir: Path = MODELS_DIR) -> None:
     (models_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Train the heart disease classifier")
+    parser.add_argument("--no-mlflow", action="store_true", help="skip MLflow tracking")
+    args = parser.parse_args(argv)
+
     result = run()
     pd.set_option("display.width", 120)
     print("Cross-validated scores (mean ± std over 5 folds, training set):")
@@ -224,18 +232,27 @@ def main() -> int:
     failures = quality_gate(result.selected, result.tuned)
     if failures:
         print("\nQUALITY GATE FAILED:", *failures, sep="\n  - ", file=sys.stderr)
-        return 1
-    print("Quality gate passed")
+    else:
+        print("Quality gate passed")
+        print("\nHeld-out test set:")
+        print(f"  threshold {result.threshold:.2f}:", _fmt(result.test_metrics))
+        print("  threshold 0.50:", _fmt(result.test_metrics_default_threshold))
+        save_outputs(result)
+        print(f"Wrote {MODELS_DIR / 'model.joblib'} and metrics.json")
 
-    print("\nHeld-out test set:")
-    print(f"  threshold {result.threshold:.2f}:", _fmt(result.test_metrics))
-    print("  threshold 0.50:", _fmt(result.test_metrics_default_threshold))
+    # Figures and tracking happen even when the gate fails, so a failed run is still inspectable
+    figures = save_figures(result)
+    if not args.no_mlflow:
+        from heart import tracking  # imported lazily: MLflow is slow to import
 
-    save_outputs(result)
-    for path in save_figures(result):
-        print(f"Wrote {path}")
-    print(f"Wrote {MODELS_DIR / 'model.joblib'} and metrics.json")
-    return 0
+        uri = tracking.setup()
+        version = tracking.log_training_run(result, figures, MODELS_DIR / "metrics.json", failures)
+        print(f"\nLogged to MLflow ({uri})")
+        if version:
+            alias = tracking.CHAMPION_ALIAS
+            print(f"Registered {tracking.REGISTERED_MODEL} v{version} as @{alias}")
+
+    return 1 if failures else 0
 
 
 def _fmt(metrics: dict[str, float]) -> str:

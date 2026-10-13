@@ -22,3 +22,8 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+    # Raised inside MLflow's own SQLAlchemy store, not our code
+    "ignore::DeprecationWarning:mlflow.*",
+    "ignore:.*noload.*:DeprecationWarning",
+]

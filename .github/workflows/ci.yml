@@ -50,8 +50,11 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt && pip install -e .
-      # Exits non-zero if the quality gate fails, which fails this job and the whole run
+      # Exits non-zero if the quality gate fails, which fails this job and the whole run.
+      # Every run (passed or failed) is logged to a fresh MLflow store on the runner.
       - run: python -m heart.train
+        env:
+          MLFLOW_DISABLE_AGENT_HINT: "1"
       - name: Upload model and evaluation artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -60,3 +63,13 @@ jobs:
             models/model.joblib
             models/metrics.json
             reports/figures/model_*.png
+      # The runner is wiped after the job, so keep its MLflow store. Download it and run
+      # `mlflow ui --backend-store-uri sqlite:///mlflow.db` to browse this CI run's experiments.
+      - name: Upload MLflow tracking store
+        if: always()  # keep the record of failed runs too
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-${{ github.sha }}
+          path: |
+            mlflow.db
+            mlartifacts/

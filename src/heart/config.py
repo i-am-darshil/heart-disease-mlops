@@ -63,6 +63,14 @@ CATEGORY_LABELS = {
 
 RANDOM_STATE = 42
 
+# Experiment tracking. A local SQLite store keeps every run and the Model Registry in one file;
+# override with MLFLOW_TRACKING_URI (e.g. a shared tracking server) without code changes.
+MLFLOW_TRACKING_URI = f"sqlite:///{ROOT_DIR / 'mlflow.db'}"
+MLFLOW_ARTIFACT_DIR = ROOT_DIR / "mlartifacts"
+MLFLOW_EXPERIMENT = "heart-disease"
+REGISTERED_MODEL = "heart-disease-classifier"
+CHAMPION_ALIAS = "champion"  # registry alias the serving layer loads
+
 # Training
 TEST_SIZE = 0.2  # held-out share, touched once for the final estimate
 CV_FOLDS = 5
