@@ -172,6 +172,8 @@ ${BOLD}Pipeline steps${RESET}
   data         Download the UCI dataset (checksum-verified) and clean it
   eda          Regenerate the EDA figures in reports/figures/
   train        Train, select, quality-gate, save models/, log to MLflow
+  predict      Predict for examples/sample_request.json (or: ./run.sh predict <file.json>)
+  reproduce    Train twice from scratch and verify both models are identical
   test         Run the unit tests with coverage
   lint         Check code style
   notebook     Re-execute both notebooks (refreshes their outputs)
@@ -200,7 +202,11 @@ main() {
         all) all ;;
         check) check ;;
         build) build ;;
-        data | eda | train | test | lint) run_make "$cmd" ;;
+        data | eda | train | test | lint | reproduce) run_make "$cmd" ;;
+        predict)
+            step "Predict${1:+ for $1}"
+            in_container make predict ${1:+INPUT="$1"}
+            ;;
         notebook)
             step "make notebook"
             USE_NOTEBOOK_IMAGE=1 in_container make notebook

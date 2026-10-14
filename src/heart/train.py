@@ -32,7 +32,7 @@ from sklearn.model_selection import (
     train_test_split,
 )
 
-from heart import evaluation
+from heart import evaluation, packaging
 from heart.config import (
     CV_FOLDS,
     FEATURES,
@@ -215,6 +215,8 @@ def save_outputs(result: TrainingResult, models_dir: Path = MODELS_DIR) -> None:
         },
     }
     (models_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
+    metadata = packaging.build_metadata(result, model_path=models_dir / "model.joblib")
+    (models_dir / "model_metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
 
 
 def main(argv: list[str] | None = None) -> int:

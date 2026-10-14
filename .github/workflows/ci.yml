@@ -1,4 +1,4 @@
-# CI pipeline. Grows phase by phase: lint -> test -> train now; docker and deploy come later.
+# CI pipeline. Grows phase by phase: lint -> test -> train + reproduce now; docker and deploy later.
 name: CI
 
 on:
@@ -61,6 +61,7 @@ jobs:
           name: model-${{ github.sha }}
           path: |
             models/model.joblib
+            models/model_metadata.json
             models/metrics.json
             reports/figures/model_*.png
       # The runner is wiped after the job, so keep its MLflow store. Download it and run
@@ -73,3 +74,17 @@ jobs:
           path: |
             mlflow.db
             mlartifacts/
+
+  # Trains twice from scratch on a fresh runner and fails unless both models are
+  # byte-identical with identical predictions and metrics.
+  reproduce:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: pip install -r requirements.txt && pip install -e .
+      - run: python -m heart.reproduce

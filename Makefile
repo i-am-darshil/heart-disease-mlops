@@ -14,7 +14,7 @@ export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup data eda notebook train mlflow-ui lint format test clean
+.PHONY: help setup data eda notebook train reproduce predict mlflow-ui lint format test clean
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -39,6 +39,12 @@ notebook:  ## Re-execute the notebooks in place (refreshes their outputs)
 
 train:  ## Tune, select, quality-gate, save models/ + figures, log to MLflow and register
 	$(BIN)/python -m heart.train
+
+reproduce:  ## Train twice from scratch and verify identical models (byte-for-byte)
+	$(BIN)/python -m heart.reproduce
+
+predict:  ## Predict for examples/sample_request.json (INPUT=path to use another file)
+	$(BIN)/python -m heart.predict $(or $(INPUT),examples/sample_request.json)
 
 mlflow-ui:  ## Open the MLflow UI for the local tracking store (http://127.0.0.1:5050)
 	$(BIN)/mlflow ui --backend-store-uri sqlite:///mlflow.db --host $(MLFLOW_HOST) --port $(MLFLOW_PORT)
