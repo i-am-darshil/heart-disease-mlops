@@ -3,8 +3,12 @@
 
 PYTHON  ?= python3.10
 VENV    := .venv
-BIN     := $(VENV)/bin
+# The Docker image sets BIN=/opt/venv/bin (its venv lives outside the mounted project)
+BIN     ?= $(VENV)/bin
 MLFLOW_PORT ?= 5050
+# The Docker image sets 0.0.0.0 so the UI is reachable through the published port;
+# ./run.sh still publishes that port on the host's localhost only
+MLFLOW_HOST ?= 127.0.0.1
 
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
@@ -19,7 +23,7 @@ setup:  ## Create venv and install all dependencies + this package (editable)
 	@$(PYTHON) -c 'import sys; assert sys.version_info[:2] == (3, 10), f"need Python 3.10, got {sys.version.split()[0]} (set PYTHON=/path/to/python3.10)"'
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
-	$(BIN)/pip install -r requirements-dev.txt
+	$(BIN)/pip install -r requirements-notebooks.txt
 	$(BIN)/pip install -e .
 
 data:  ## Download the raw UCI file (checksum-verified) and write the cleaned CSV
@@ -37,7 +41,7 @@ train:  ## Tune, select, quality-gate, save models/ + figures, log to MLflow and
 	$(BIN)/python -m heart.train
 
 mlflow-ui:  ## Open the MLflow UI for the local tracking store (http://127.0.0.1:5050)
-	$(BIN)/mlflow ui --backend-store-uri sqlite:///mlflow.db --port $(MLFLOW_PORT)
+	$(BIN)/mlflow ui --backend-store-uri sqlite:///mlflow.db --host $(MLFLOW_HOST) --port $(MLFLOW_PORT)
 
 lint:  ## Check code style and common bugs (fails on any issue)
 	$(BIN)/ruff check .

@@ -1,0 +1,25 @@
+# Only requirements, pyproject.toml and src/ are copied into the image; the rest is
+# mounted at run time. Excluding everything else keeps builds fast and avoids leaking
+# local state (venv, MLflow store, models) into the image.
+.git
+.venv
+.idea
+.vscode
+.DS_Store
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+*.egg-info
+mlflow.db
+mlartifacts
+mlruns
+models
+data/raw
+notebooks
+reports
+screenshots
+docs

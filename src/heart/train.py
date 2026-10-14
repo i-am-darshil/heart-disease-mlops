@@ -245,7 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_mlflow:
         from heart import tracking  # imported lazily: MLflow is slow to import
 
-        uri = tracking.setup()
+        try:
+            uri = tracking.setup()
+        except tracking.TrackingStoreMismatch as err:
+            print(f"\nMLFLOW ERROR: {err}", file=sys.stderr)
+            return 1
         version = tracking.log_training_run(result, figures, MODELS_DIR / "metrics.json", failures)
         print(f"\nLogged to MLflow ({uri})")
         if version:

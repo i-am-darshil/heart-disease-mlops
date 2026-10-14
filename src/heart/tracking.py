@@ -45,13 +45,37 @@ def setup(tracking_uri: str | None = None, artifact_dir: Path = MLFLOW_ARTIFACT_
     """Point MLflow at the tracking store and create the experiment if needed."""
     uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI", MLFLOW_TRACKING_URI)
     mlflow.set_tracking_uri(uri)
-    if mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT) is None:
+    experiment = mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT)
+    if experiment is None:
         mlflow.create_experiment(MLFLOW_EXPERIMENT, artifact_location=artifact_dir.as_uri())
+    else:
+        _check_artifact_location(experiment.artifact_location, artifact_dir)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
     # MLflow 3's UI opens an untagged experiment on the GenAI "Traces" view, which looks
     # empty for a classic ML project. Mark it as model development so the Runs table shows.
     mlflow.set_experiment_tag("mlflow.experimentKind", "custom_model_development")
     return uri
+
+
+class TrackingStoreMismatch(RuntimeError):
+    pass
+
+
+def _check_artifact_location(stored: str, expected: Path) -> None:
+    """Fail clearly if the store was created somewhere else.
+
+    MLflow saves absolute artifact paths, so an mlflow.db created natively on a Mac
+    (/Users/...) can't be reused inside Docker (/app/...) or on another machine, and
+    vice versa.
+    """
+    stored_path = Path(stored.removeprefix("file://"))
+    if stored_path.resolve() != expected.resolve():
+        raise TrackingStoreMismatch(
+            f"The MLflow store in mlflow.db was created at a different location "
+            f"({stored_path}), not this project ({expected}). This happens when mixing "
+            f"native runs with ./run.sh (Docker), or after moving the project. "
+            f"Reset it with `./run.sh reset-mlflow` (or `rm -rf mlflow.db mlartifacts`)."
+        )
 
 
 def git_commit() -> str:
@@ -139,12 +163,13 @@ def log_training_run(result, figures: list[Path], metrics_path: Path, gate_failu
         # Data lineage: what was trained on and where it came from
         with warnings.catch_warnings():
             # MLflow warns that the int target can't hold NaN; the target is never missing.
-            # Also hides pandas deprecation noise raised inside MLflow.
+            # Also hides pandas deprecation noise raised inside MLflow. log_input infers
+            # the schema again, so it belongs inside the same filter.
             warnings.simplefilter("ignore")
             dataset = mlflow.data.from_pandas(
                 data, source=RAW_DATA_URL, name="uci-heart-cleveland", targets=TARGET
             )
-        mlflow.log_input(dataset, context="training")
+            mlflow.log_input(dataset, context="training")
         mlflow.set_tags({"raw_data_sha256": RAW_DATA_SHA256, "dataset_digest": dataset.digest})
 
         mlflow.log_params(

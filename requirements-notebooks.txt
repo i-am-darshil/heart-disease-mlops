@@ -1,0 +1,5 @@
+# Jupyter, for the EDA / modelling notebooks. Kept separate because it adds about 66
+# packages: only `./run.sh jupyter` / `./run.sh notebook` (the "notebooks" image) and
+# `make setup` install it.
+-r requirements-dev.txt
+jupyter==1.1.1

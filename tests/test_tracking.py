@@ -104,3 +104,14 @@ def test_model_input_is_float64_for_every_feature():
 def test_experiment_is_marked_as_classic_ml_so_the_ui_shows_runs(store):
     experiment = mlflow.get_experiment_by_name(tracking.MLFLOW_EXPERIMENT)
     assert experiment.tags["mlflow.experimentKind"] == "custom_model_development"
+
+
+def test_store_created_elsewhere_fails_with_a_clear_message(tmp_path):
+    previous = mlflow.get_tracking_uri()
+    try:
+        uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        tracking.setup(uri, artifact_dir=tmp_path / "elsewhere")
+        with pytest.raises(tracking.TrackingStoreMismatch, match="reset-mlflow"):
+            tracking.setup(uri, artifact_dir=tmp_path / "mlartifacts")
+    finally:
+        mlflow.set_tracking_uri(previous)
