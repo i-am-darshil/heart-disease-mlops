@@ -12,13 +12,21 @@ uses the same `Predictor`, so batch scripts and the API can't disagree.
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
-from heart.config import FEATURES, MODELS_DIR
+from heart.config import FEATURES, MODELS_DIR, readable_feature_name
 from heart.packaging import ModelPackageError, load_model
+
+
+@dataclass
+class Contribution:
+    feature: str  # model feature, e.g. "cp_4" (one-hot level) or "thalach"
+    description: str  # human-readable, e.g. "Chest pain type = asymptomatic"
+    effect: float  # change in log-odds of disease; > 0 raises risk, < 0 lowers it
 
 
 @dataclass
@@ -28,6 +36,7 @@ class Prediction:
     probability: float  # model's probability of heart disease
     confidence: float  # probability of the predicted class
     threshold: float
+    top_factors: list[Contribution] = field(default_factory=list)
 
 
 class Predictor:
@@ -47,10 +56,36 @@ class Predictor:
         # Missing keys and nulls both become NaN; float64 matches the training contract
         return pd.DataFrame.from_records(records, columns=FEATURES).astype("float64")
 
-    def predict(self, records: list[dict]) -> list[Prediction]:
+    def explain(self, X: pd.DataFrame, top_n: int = 3) -> list[list[Contribution]]:
+        """Per-patient top factors behind each prediction.
+
+        For a linear model this is exact: each feature's transformed value times its
+        coefficient is its contribution to the log-odds, and they sum (with the
+        intercept) to the model's output. Other models get no per-patient factors.
+        """
+        pipeline = self.model.estimator  # FixedThresholdClassifier wraps the pipeline
+        classifier = pipeline.named_steps["model"]
+        if not hasattr(classifier, "coef_"):
+            return [[] for _ in range(len(X))]
+        preprocess = pipeline.named_steps["preprocess"]
+        names = preprocess.get_feature_names_out()
+        effects = preprocess.transform(X) * classifier.coef_[0]
+        explanations = []
+        for row in effects:
+            order = [i for i in np.argsort(-np.abs(row)) if row[i] != 0][:top_n]
+            explanations.append(
+                [
+                    Contribution(names[i], readable_feature_name(names[i]), round(float(row[i]), 3))
+                    for i in order
+                ]
+            )
+        return explanations
+
+    def predict(self, records: list[dict], explain: bool = True) -> list[Prediction]:
         X = self.to_frame(records)
         proba = self.model.predict_proba(X)[:, 1]
         preds = self.model.predict(X)  # applies the tuned threshold stored in the model
+        factors = self.explain(X) if explain else [[] for _ in range(len(X))]
         return [
             Prediction(
                 prediction=int(y),
@@ -58,8 +93,9 @@ class Predictor:
                 probability=round(float(p), 4),
                 confidence=round(float(p if y == 1 else 1 - p), 4),
                 threshold=round(self.threshold, 4),
+                top_factors=f,
             )
-            for y, p in zip(preds, proba, strict=True)
+            for y, p, f in zip(preds, proba, factors, strict=True)
         ]
 
     def predict_one(self, record: dict) -> Prediction:

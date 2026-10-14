@@ -1,0 +1,14 @@
+# Serving-only dependencies: what the API image installs. Versions must match
+# requirements.txt exactly: the model's metadata records the training-time
+# scikit-learn / numpy / pandas / joblib versions and the API refuses to load a model
+# trained with different ones (tests/test_serve_requirements.py checks they agree).
+# No MLflow, matplotlib or seaborn: the API only loads models/model.joblib.
+pandas==2.3.3
+numpy==2.2.6
+scikit-learn==1.7.2
+joblib==1.6.0
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+prometheus-fastapi-instrumentator==8.1.0
+prometheus_client==0.26.0

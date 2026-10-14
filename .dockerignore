@@ -17,7 +17,10 @@ htmlcov
 mlflow.db
 mlartifacts
 mlruns
-models
+models/*
+# ...except the two files the serving image bakes in
+!models/model.joblib
+!models/model_metadata.json
 data/raw
 notebooks
 reports

@@ -12,6 +12,9 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-heart-pipeline:latest}"
 NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-heart-notebooks:latest}"
+SERVE_IMAGE="${SERVE_IMAGE:-heart-api:latest}"
+API_PORT="${API_PORT:-8000}"
+API_CONTAINER="${API_CONTAINER:-heart-api}"
 MLFLOW_PORT="${MLFLOW_PORT:-5050}"
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 JUPYTER_TOKEN="${JUPYTER_TOKEN:-heart}"
@@ -142,6 +145,88 @@ jupyter_lab() {
         --ServerApp.root_dir=/app/notebooks --IdentityProvider.token="$JUPYTER_TOKEN"
 }
 
+serve_build() {
+    [ -f "$PROJECT_DIR/models/model.joblib" ] || {
+        warn "No trained model yet; training one first (the API image bakes it in)."
+        run_make train
+    }
+    step "Building API image $SERVE_IMAGE (slim: FastAPI + scikit-learn, no MLflow/plots)"
+    DOCKER_BUILDKIT=1 "${DOCKER[@]}" build --target serve -t "$SERVE_IMAGE" "$PROJECT_DIR"
+    local size
+    size=$("${DOCKER[@]}" image inspect "$SERVE_IMAGE" --format '{{.Size}}' | awk '{printf "%.0f MB", $1/1e6}')
+    ok "API image built: $SERVE_IMAGE ($size)"
+}
+
+serve() {
+    image_exists "$SERVE_IMAGE" || serve_build
+    "${DOCKER[@]}" rm -f "$API_CONTAINER" >/dev/null 2>&1 || true
+    local holder
+    holder=$("${DOCKER[@]}" ps --format '{{.Names}} {{.Ports}}' | grep -E ":$API_PORT->" | cut -d' ' -f1 || true)
+    if [ -n "$holder" ]; then
+        die "Port $API_PORT is already used by container '$holder'. Pick another: API_PORT=8001 ./run.sh serve"
+    fi
+    step "Starting API container '$API_CONTAINER' on http://127.0.0.1:$API_PORT"
+    "${DOCKER[@]}" run -d --name "$API_CONTAINER" \
+        -p "127.0.0.1:$API_PORT:8000" \
+        --restart unless-stopped \
+        "$SERVE_IMAGE" >/dev/null
+    printf '  Waiting for the model to load'
+    local i
+    for i in $(seq 1 40); do
+        if curl -sf "http://127.0.0.1:$API_PORT/ready" >/dev/null 2>&1; then
+            printf '\n'
+            ok "API is ready"
+            printf '  Docs (Swagger UI): http://127.0.0.1:%s/docs\n' "$API_PORT"
+            printf '  Try it:            ./run.sh api-test\n'
+            printf '  Logs:              ./run.sh api-logs\n'
+            printf '  Stop:              ./run.sh api-stop\n'
+            printf '  From your laptop:  ssh -N -L %s:127.0.0.1:%s <user>@<vm-host>\n' "$API_PORT" "$API_PORT"
+            return
+        fi
+        printf '.'
+        sleep 1
+    done
+    printf '\n'
+    "${DOCKER[@]}" logs --tail 20 "$API_CONTAINER" >&2 || true
+    die "API did not become ready in 40 s; container logs are above."
+}
+
+api_test() {
+    local base="http://127.0.0.1:$API_PORT"
+    command -v curl >/dev/null 2>&1 || die "curl is needed for api-test (sudo dnf -y install curl)."
+    curl -sf "$base/health" >/dev/null 2>&1 || die "API isn't running on $base. Start it: ./run.sh serve"
+    step "GET /health"
+    curl -s "$base/health"
+    printf '\n'
+    step "GET /ready"
+    curl -s "$base/ready"
+    printf '\n'
+    step "POST /predict  (examples/sample_request.json)"
+    curl -s -X POST "$base/predict" -H 'Content-Type: application/json' \
+        -d @"$PROJECT_DIR/examples/sample_request.json"
+    printf '\n'
+    step "POST /predict/batch  (examples/sample_batch.json)"
+    printf '{"patients": %s}' "$(cat "$PROJECT_DIR/examples/sample_batch.json")" \
+        | curl -s -X POST "$base/predict/batch" -H 'Content-Type: application/json' -d @-
+    printf '\n'
+    step "POST /predict with invalid input (expect HTTP 422)"
+    curl -s -X POST "$base/predict" -H 'Content-Type: application/json' \
+        -d '{"age": 500, "cp": 9}' -w '\n  -> HTTP %{http_code}\n'
+    step "GET /metrics  (model metrics only)"
+    curl -s "$base/metrics" | grep -E '^heart_(predictions_total|validation_errors_total)'
+    ok "API answered every request"
+}
+
+api_logs() { "${DOCKER[@]}" logs -f --tail 50 "$API_CONTAINER"; }
+
+api_stop() {
+    if "${DOCKER[@]}" rm -f "$API_CONTAINER" >/dev/null 2>&1; then
+        ok "API container stopped"
+    else
+        warn "No API container running"
+    fi
+}
+
 reset_mlflow() {
     step "Deleting the local MLflow store (mlflow.db, mlartifacts/)"
     rm -rf "$PROJECT_DIR/mlflow.db" "$PROJECT_DIR/mlartifacts"
@@ -149,8 +234,9 @@ reset_mlflow() {
 }
 
 clean() {
-    step "Removing images $IMAGE and $NOTEBOOK_IMAGE"
-    for image in "$NOTEBOOK_IMAGE" "$IMAGE"; do
+    api_stop >/dev/null 2>&1 || true
+    step "Removing images $IMAGE, $NOTEBOOK_IMAGE and $SERVE_IMAGE"
+    for image in "$SERVE_IMAGE" "$NOTEBOOK_IMAGE" "$IMAGE"; do
         if image_exists "$image"; then
             "${DOCKER[@]}" image rm "$image"
         fi
@@ -178,6 +264,13 @@ ${BOLD}Pipeline steps${RESET}
   lint         Check code style
   notebook     Re-execute both notebooks (refreshes their outputs)
 
+${BOLD}API (Phase 5)${RESET}
+  serve-build  Build the slim API image with the trained model baked in
+  serve        Start the API container on http://127.0.0.1:$API_PORT (docs at /docs)
+  api-test     Send example requests to the running API
+  api-logs     Follow the API's JSON request logs (Ctrl+C to stop following)
+  api-stop     Stop the API container
+
 ${BOLD}Interactive${RESET}
   jupyter      Jupyter Lab on http://127.0.0.1:$JUPYTER_PORT  (builds a second image with Jupyter)
   shell        Open a bash shell inside the container
@@ -186,7 +279,7 @@ ${BOLD}Housekeeping${RESET}
   reset-mlflow Delete local MLflow history (mlflow.db, mlartifacts/)
   clean        Remove the Docker images (keeps all outputs)
 
-Ports can be changed: MLFLOW_PORT=5051 ./run.sh mlflow
+Ports can be changed: MLFLOW_PORT=5051 ./run.sh mlflow, API_PORT=8001 ./run.sh serve
 Jupyter's login token is "heart"; change it with JUPYTER_TOKEN=... ./run.sh jupyter
 EOF
 }
@@ -213,6 +306,11 @@ main() {
             ;;
         mlflow | mlflow-ui) mlflow_ui ;;
         jupyter) jupyter_lab ;;
+        serve-build) serve_build ;;
+        serve) serve ;;
+        api-test) api_test ;;
+        api-logs) api_logs ;;
+        api-stop) api_stop ;;
         shell) in_container bash ;;
         reset-mlflow) reset_mlflow ;;
         clean) clean ;;

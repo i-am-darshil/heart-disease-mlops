@@ -18,7 +18,7 @@ from sklearn.metrics import (
 )
 
 from heart import eda
-from heart.config import CATEGORY_LABELS
+from heart.config import readable_feature_name
 
 METRICS = ["accuracy", "precision", "recall", "f1", "roc_auc"]
 
@@ -177,19 +177,6 @@ def feature_effects(pipeline) -> pd.Series:
     else:
         values = model.feature_importances_
     return pd.Series(values, index=names).sort_values(key=np.abs, ascending=False)
-
-
-def readable_feature_name(name: str) -> str:
-    """'cp_4.0' -> 'Chest pain type = asymptomatic', 'sex' -> 'Sex = male'."""
-    if name == "sex":
-        return "Sex = male"
-    if name in ("fbs", "exang"):
-        return f"{eda.FEATURE_NAMES[name]} = yes"
-    if "_" in name:
-        col, code = name.rsplit("_", 1)
-        level = CATEGORY_LABELS.get(col, {}).get(int(code), code)
-        return f"{eda.FEATURE_NAMES[col]} = {level}"
-    return eda.FEATURE_NAMES.get(name, name)
 
 
 def plot_feature_effects(pipeline, path: Path, top_n: int = 15) -> Path:

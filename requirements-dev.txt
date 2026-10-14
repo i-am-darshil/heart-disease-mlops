@@ -1,7 +1,7 @@
-# Development tools: testing and linting. Installed in the pipeline Docker image and by
-# `make setup`; not part of the serving image.
+# Development tools: testing and linting (httpx2 powers FastAPI's TestClient).
+# Installed in the pipeline Docker image and by `make setup`; not in the serving image.
 -r requirements.txt
 pytest==9.1.1
 pytest-cov==7.1.0
-httpx==0.28.1
+httpx2==2.13.1
 ruff==0.17.0

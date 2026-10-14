@@ -50,7 +50,24 @@ CATEGORICAL_VALUES = {
     "thal": {3, 6, 7},
 }
 
-# Human-readable labels for the coded columns (EDA plots and docs only)
+# Human-readable names for plots, explanations and API docs
+FEATURE_NAMES = {
+    "age": "Age (years)",
+    "trestbps": "Resting blood pressure (mm Hg)",
+    "chol": "Serum cholesterol (mg/dl)",
+    "thalach": "Max heart rate achieved",
+    "oldpeak": "ST depression (exercise vs rest)",
+    "sex": "Sex",
+    "cp": "Chest pain type",
+    "fbs": "Fasting blood sugar",
+    "restecg": "Resting ECG",
+    "exang": "Exercise-induced angina",
+    "slope": "Slope of peak exercise ST",
+    "ca": "Major vessels coloured (fluoroscopy)",
+    "thal": "Thallium stress test",
+}
+
+# Human-readable labels for the coded columns
 CATEGORY_LABELS = {
     "sex": {0: "female", 1: "male"},
     "cp": {1: "typical angina", 2: "atypical angina", 3: "non-anginal", 4: "asymptomatic"},
@@ -79,3 +96,16 @@ CV_FOLDS = 5
 TARGET_RECALL = 0.90
 # Quality gate: training (and CI) fails if the selected model's CV ROC-AUC is below this
 MIN_CV_ROC_AUC = 0.85
+
+
+def readable_feature_name(name: str) -> str:
+    """Model feature -> readable text: 'cp_4' -> 'Chest pain type = asymptomatic'."""
+    if name == "sex":
+        return "Sex = male"
+    if name in ("fbs", "exang"):
+        return f"{FEATURE_NAMES[name]} = yes"
+    if "_" in name:
+        col, code = name.rsplit("_", 1)
+        level = CATEGORY_LABELS.get(col, {}).get(int(code), code)
+        return f"{FEATURE_NAMES[col]} = {level}"
+    return FEATURE_NAMES.get(name, name)

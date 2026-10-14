@@ -15,6 +15,7 @@ from heart.config import (  # noqa: E402
     BINARY_FEATURES,
     CATEGORICAL_FEATURES,
     CATEGORY_LABELS,
+    FEATURE_NAMES,
     FIGURES_DIR,
     NUMERIC_FEATURES,
     TARGET,
@@ -33,22 +34,6 @@ GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
 SURFACE = "#fcfcfb"
 DIVERGING = LinearSegmentedColormap.from_list("blue_gray_red", ["#256abf", "#f0efec", "#e34948"])
-
-FEATURE_NAMES = {
-    "age": "Age (years)",
-    "trestbps": "Resting blood pressure (mm Hg)",
-    "chol": "Serum cholesterol (mg/dl)",
-    "thalach": "Max heart rate achieved",
-    "oldpeak": "ST depression (exercise vs rest)",
-    "sex": "Sex",
-    "cp": "Chest pain type",
-    "fbs": "Fasting blood sugar",
-    "restecg": "Resting ECG",
-    "exang": "Exercise-induced angina",
-    "slope": "Slope of peak exercise ST",
-    "ca": "Major vessels coloured (fluoroscopy)",
-    "thal": "Thallium stress test",
-}
 
 
 def _style() -> None:
