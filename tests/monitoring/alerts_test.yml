@@ -1,0 +1,206 @@
+# Unit tests for helm/monitoring/files/alerts.yml, run by promtool (CI job helm-lint):
+#   docker run --rm -v "$PWD:/w" -w /w --entrypoint promtool prom/prometheus:v3.13.4 \
+#     test rules tests/monitoring/alerts_test.yml
+#
+# Each test feeds Prometheus a made-up metric history ("series", one sample per
+# interval: "a+bxN" means start at a, add b, N times) and asserts which alerts fire.
+# round() in the PromQL checks avoids float noise (and drops the metric name).
+
+rule_files:
+  - ../../helm/monitoring/files/alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # Healthy traffic: nothing fires
+  - interval: 15s
+    input_series:
+      - series: up{job="heart-api", pod="a"}
+        values: "1x80"
+      - series: heart_model_loaded{job="heart-api", pod="a"}
+        values: "1x80"
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="200"}
+        values: "0+150x80"
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="422"}
+        values: "0+3x80"
+    alert_rule_test:
+      - {eval_time: 15m, alertname: HeartApiDown, exp_alerts: []}
+      - {eval_time: 15m, alertname: HeartApiServerErrors, exp_alerts: []}
+      - {eval_time: 15m, alertname: HeartApiInvalidInputSpike, exp_alerts: []}
+      - {eval_time: 15m, alertname: HeartModelNotLoaded, exp_alerts: []}
+    promql_expr_test:
+      # 150 + 3 requests per 15 s = 10.2 / s
+      - expr: round(heart:requests:rate5m, 0.001)
+        eval_time: 15m
+        exp_samples:
+          - value: 10.2
+      # no 5xx series at all still gives 0, not "no data"
+      - expr: round(heart:server_error_ratio:rate5m, 0.001)
+        eval_time: 15m
+        exp_samples:
+          - value: 0
+
+  # No pod is scraped for over a minute
+  - interval: 15s
+    input_series:
+      - series: up{job="heart-api", pod="a"}
+        values: "1x4 0x20"
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: HeartApiDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HeartApiDown
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: No heart-api pod is answering
+              description: Prometheus can't scrape any heart-api pod. Check `./run.sh k8s-status`.
+      - eval_time: 4m
+        alertname: HeartApiTargetDown
+        exp_alerts:
+          - exp_labels: {severity: warning, job: heart-api, pod: a}
+            exp_annotations:
+              summary: Pod a isn't answering
+              description: Prometheus can't scrape a (crashed, overloaded or being replaced).
+
+  # A pod is up but its model failed to load
+  - interval: 15s
+    input_series:
+      - series: heart_model_loaded{job="heart-api", pod="b"}
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HeartModelNotLoaded
+        exp_alerts:
+          - exp_labels: {severity: critical, job: heart-api, pod: b}
+            exp_annotations:
+              summary: Pod b is running without a model
+              description: The model package failed to load (see /ready and the pod's logs); the pod gets no traffic.
+
+  # 10% of requests fail with 500 for 10 minutes
+  - interval: 15s
+    input_series:
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="200"}
+        values: "0+90x60"
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="500"}
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HeartApiServerErrors
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: HeartApiServerErrors
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: 10% of requests fail with a server error
+              description: More than 5% of requests returned 5xx over the last 5 minutes.
+
+  # 30% invalid requests (what `./run.sh load errors` sends)
+  - interval: 15s
+    input_series:
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="200"}
+        values: "0+70x40"
+      - series: http_requests_total{job="heart-api", pod="a", handler="/predict", method="POST", status="422"}
+        values: "0+30x40"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HeartApiInvalidInputSpike
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: 30% of requests are rejected as invalid
+              description: A client is sending malformed patient records, or expects a different input contract.
+
+  # Slow model: every /predict takes between 0.5 and 1 s
+  - interval: 15s
+    input_series:
+      - series: http_request_duration_seconds_bucket{job="heart-api", handler="/predict", method="POST", le="0.5"}
+        values: "0x60"
+      - series: http_request_duration_seconds_bucket{job="heart-api", handler="/predict", method="POST", le="1"}
+        values: "0+10x60"
+      - series: http_request_duration_seconds_bucket{job="heart-api", handler="/predict", method="POST", le="+Inf"}
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HeartApiSlowPredictions
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: /predict p95 latency is 975ms
+              description: 95th percentile latency of /predict has been above 500 ms for 5 minutes.
+
+  # Prediction drift: training flagged 60% of patients; live traffic flags 90%
+  - interval: 15s
+    input_series:
+      - series: heart_reference_positive_rate{job="heart-api", pod="a"}
+        values: "0.6x120"
+      - series: heart_predictions_total{job="heart-api", pod="a", label="heart disease"}
+        values: "0+9x120"
+      - series: heart_predictions_total{job="heart-api", pod="a", label="no heart disease"}
+        values: "0+1x120"
+    promql_expr_test:
+      - expr: round(heart:positive_rate:rate15m, 0.001)
+        eval_time: 25m
+        exp_samples:
+          - value: 0.9
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HeartPredictionDrift
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: 30% gap between live and training positive rates
+              description: >-
+                The share of patients flagged differs from the training baseline by more than
+                20 points. The patient population may have changed; consider retraining.
+
+  # Prediction drift needs enough traffic: 10 predictions in 15 minutes is too few to judge
+  - interval: 1m
+    input_series:
+      - series: heart_reference_positive_rate{job="heart-api", pod="a"}
+        values: "0.6x30"
+      - series: heart_predictions_total{job="heart-api", pod="a", label="heart disease"}
+        values: "0+1x30"
+    alert_rule_test:
+      - {eval_time: 25m, alertname: HeartPredictionDrift, exp_alerts: []}
+
+  # Input drift: patients average 15 years older than training (SD 9); cholesterol unchanged
+  - interval: 15s
+    input_series:
+      - series: heart_reference_feature_mean{job="heart-api", pod="a", feature="age"}
+        values: "54x80"
+      - series: heart_reference_feature_std{job="heart-api", pod="a", feature="age"}
+        values: "9x80"
+      - series: heart_input_feature_sum{job="heart-api", pod="a", feature="age"}
+        values: "0+690x80"
+      - series: heart_input_feature_count{job="heart-api", pod="a", feature="age"}
+        values: "0+10x80"
+      - series: heart_reference_feature_mean{job="heart-api", pod="a", feature="chol"}
+        values: "250x80"
+      - series: heart_reference_feature_std{job="heart-api", pod="a", feature="chol"}
+        values: "50x80"
+      - series: heart_input_feature_sum{job="heart-api", pod="a", feature="chol"}
+        values: "0+2500x80"
+      - series: heart_input_feature_count{job="heart-api", pod="a", feature="chol"}
+        values: "0+10x80"
+    promql_expr_test:
+      # (69 - 54) / 9 = 1.667 SD; cholesterol (250 - 250) / 50 = 0
+      - expr: round(heart:feature_mean_shift_sd:rate10m, 0.001)
+        eval_time: 18m
+        exp_samples:
+          - labels: '{feature="age"}'
+            value: 1.667
+          - labels: '{feature="chol"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: HeartInputDrift
+        exp_alerts:
+          - exp_labels: {severity: warning, feature: age}
+            exp_annotations:
+              summary: age has drifted 1.7 SD from training
+              description: >-
+                The recent mean of age is more than half a training standard
+                deviation away from its training mean.

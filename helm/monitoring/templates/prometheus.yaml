@@ -1,0 +1,111 @@
+{{- $sel := dict "name" "prometheus" "root" . -}}
+{{- with .Values.prometheus.persistence }}{{ if .enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $.Release.Name }}-prometheus
+  labels:
+    {{- include "monitoring.labels" $ | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size }}
+---
+{{- end }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+    {{- include "monitoring.selector" $sel | nindent 4 }}
+spec:
+  replicas: 1
+  # The data volume can be mounted by one pod at a time: stop the old pod before starting
+  # the new one (a rolling update would deadlock on the volume)
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "monitoring.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitoring.labels" . | nindent 8 }}
+        {{- include "monitoring.selector" $sel | nindent 8 }}
+      annotations:
+        # Restart Prometheus when its config or rules change
+        checksum/config: {{ include (print $.Template.BasePath "/prometheus-config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-prometheus
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        # The image's "nobody" user; fsGroup makes the data volume writable for it
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: "{{ .Values.prometheus.image.repository }}:{{ .Values.prometheus.image.tag }}"
+          imagePullPolicy: {{ .Values.prometheus.image.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            - --storage.tsdb.retention.size={{ .Values.prometheus.retentionSize }}
+            # Served under /prometheus so it can share the Ingress with the API and Grafana
+            - --web.external-url=/prometheus/
+            - --web.route-prefix=/prometheus
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /prometheus/-/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /prometheus/-/healthy
+              port: http
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-prometheus
+        - name: data
+          {{- if .Values.prometheus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-prometheus
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "monitoring.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http

@@ -136,6 +136,35 @@ def test_metrics_expose_http_and_model_counters(client):
     assert 'heart_validation_errors_total{endpoint="/predict"}' in text
 
 
+def test_metrics_describe_the_served_model_and_its_training_baseline(client, models_dir):
+    meta = json.loads((models_dir / "model_metadata.json").read_text())
+    text = client.get("/metrics").text
+    info = f'estimator="{meta["estimator"]}",model_version="{meta["model_version"]}"'
+    assert f"heart_model_info{{{info}}} 1.0" in text
+    assert "heart_model_loaded 1.0" in text
+    assert f"heart_reference_positive_rate {meta['reference']['positive_rate']}" in text
+    assert 'heart_reference_feature_mean{feature="chol"}' in text
+
+
+def test_metrics_track_input_values_and_missing_features(client):
+    def value(text, sample):
+        line = next(x for x in text.splitlines() if x.startswith(sample + " "))
+        return float(line.split()[-1])
+
+    before = client.get("/metrics").text
+    client.post("/predict", json=EXAMPLE_PATIENT | {"chol": 400, "thal": None})
+    after = client.get("/metrics").text
+    chol_sum = 'heart_input_feature_sum{feature="chol"}'
+    missing = 'heart_missing_features_total{feature="thal"}'
+    assert value(after, chol_sum) - value(before, chol_sum) == 400
+    assert value(after, missing) - (value(before, missing) if missing in before else 0) == 1
+    assert "heart_inference_seconds_count" in after
+
+
+def test_model_loaded_is_zero_without_a_model(client_without_model):
+    assert "heart_model_loaded 0.0" in client_without_model.get("/metrics").text
+
+
 def test_requests_are_logged_as_json_without_patient_data(client, caplog):
     from heart.api.logging import JsonFormatter
 

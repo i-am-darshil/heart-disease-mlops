@@ -13,7 +13,7 @@
 # api-image builds the slim serving image with the model trained in this run, smoke-tests
 #           the running container, and on main pushes it to GHCR as
 #           ghcr.io/<owner>/heart-disease-api:<sha> (+ :latest).
-# helm-lint validates the Kubernetes chart (helm lint + schema check of rendered manifests).
+# helm-lint validates both Helm charts (API + monitoring) and unit-tests the alert rules.
 #
 # Deployment is pull-based: GitHub never connects to the VM. A systemd timer on the VM
 # notices the new :latest, runs `helm upgrade` + `helm test`, and rolls back on failure.
@@ -273,8 +273,9 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Validates the Helm chart: helm lint, then every rendered manifest against the
-  # Kubernetes 1.36 API schema (catches typos like a misspelled field before deploy).
+  # Validates the Helm charts (API + monitoring): helm lint, then every rendered manifest
+  # against the Kubernetes 1.36 API schema (catches typos like a misspelled field before
+  # deploy), then promtool checks and unit-tests the Prometheus alert rules.
   helm-lint:
     runs-on: ubuntu-latest
     steps:
@@ -282,6 +283,6 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: v4.3.0
-      - run: helm lint helm/heart-api --strict
-      - name: Validate rendered manifests
+      - run: helm lint helm/heart-api helm/monitoring --strict
+      - name: Validate rendered manifests and test the alert rules
         run: scripts/validate-chart.sh

@@ -16,6 +16,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import joblib
+import numpy as np
 
 from heart import __version__
 from heart.config import (
@@ -57,6 +58,23 @@ def input_schema() -> list[dict]:
     return fields
 
 
+def training_reference(result) -> dict:
+    """The training-time baseline the API compares live traffic against (drift monitoring).
+
+    positive_rate: share of patients flagged at the tuned threshold, measured on
+    out-of-fold predictions, so it is what to expect on patients the model hasn't seen.
+    numeric: mean and standard deviation of each numeric feature in the training set.
+    """
+    X = result.X_train[NUMERIC_FEATURES]
+    return {
+        "positive_rate": round(float(np.mean(result.selected.oof_proba >= result.threshold)), 4),
+        "numeric": {
+            name: {"mean": round(float(X[name].mean()), 4), "std": round(float(X[name].std()), 4)}
+            for name in NUMERIC_FEATURES
+        },
+    }
+
+
 def build_metadata(result, model_path: Path) -> dict:
     from heart.tracking import git_commit  # imported lazily: pulls in MLflow
 
@@ -90,6 +108,7 @@ def build_metadata(result, model_path: Path) -> dict:
             "binary": BINARY_FEATURES,
         },
         "input_schema": input_schema(),
+        "reference": training_reference(result),
         "environment": {
             "python": platform.python_version(),
             "platform": f"{platform.system()}-{platform.machine()}",

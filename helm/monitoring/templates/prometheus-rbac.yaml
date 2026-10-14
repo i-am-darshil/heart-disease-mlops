@@ -1,0 +1,38 @@
+# Service discovery needs to list pods. Read-only, and only in the scraped namespaces
+# (a Role per namespace, not a cluster-wide ClusterRole).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+{{- range .Values.scrapeNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-prometheus-discovery
+  namespace: {{ . }}
+  labels:
+    {{- include "monitoring.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-prometheus-discovery
+  namespace: {{ . }}
+  labels:
+    {{- include "monitoring.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Release.Name }}-prometheus
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

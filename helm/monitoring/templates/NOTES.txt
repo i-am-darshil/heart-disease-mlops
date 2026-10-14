@@ -1,0 +1,11 @@
+Monitoring deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+Scraping pods annotated prometheus.io/scrape=true in: {{ join ", " .Values.scrapeNamespaces }}
+
+{{- if .Values.ingress.grafana }}
+  Grafana:     http://<node-ip>/grafana   (dashboard "Heart disease API"{{ if .Values.grafana.anonymousViewer }}, viewable without login{{ end }})
+{{- end }}
+{{- if .Values.ingress.prometheus }}
+  Prometheus:  http://<node-ip>/prometheus   (targets: /prometheus/targets, alerts: /prometheus/alerts)
+{{- end }}
+  Grafana admin password:
+    kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-grafana -o jsonpath='{.data.admin-password}' | base64 -d; echo

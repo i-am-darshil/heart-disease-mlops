@@ -1,0 +1,11 @@
+apiVersion: v2
+name: monitoring
+description: Prometheus + Grafana for the heart-disease API (metrics, alert rules, dashboard)
+type: application
+# Chart version: bump when the templates change
+version: 0.1.0
+# Versions of the two images (values.yaml pins each one)
+appVersion: "prometheus-v3.13.4_grafana-13.0.10"
+home: https://github.com/i-am-darshil/heart-disease-mlops
+sources:
+  - https://github.com/i-am-darshil/heart-disease-mlops

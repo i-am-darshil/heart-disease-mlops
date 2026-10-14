@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from heart import packaging, train
-from heart.config import FEATURES
+from heart.config import FEATURES, NUMERIC_FEATURES
 from heart.data import load_processed
 from heart.predict import Predictor, main
 from tests.test_train import FAST_MODELS
@@ -37,6 +37,13 @@ def test_metadata_describes_model_data_and_environment(models_dir):
     assert meta["training_data"]["n_train"] + meta["training_data"]["n_test"] == 303
     assert set(packaging.RUNTIME_LIBRARIES) <= set(meta["environment"])
     assert packaging.python_version_matches(meta)
+
+
+def test_metadata_records_the_training_baseline_for_drift_monitoring(models_dir):
+    ref = json.loads((models_dir / "model_metadata.json").read_text())["reference"]
+    assert 0 < ref["positive_rate"] < 1
+    assert set(ref["numeric"]) == set(NUMERIC_FEATURES)
+    assert 40 < ref["numeric"]["age"]["mean"] < 65 and ref["numeric"]["age"]["std"] > 0
 
 
 def test_input_schema_lists_ranges_and_allowed_codes():

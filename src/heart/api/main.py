@@ -25,7 +25,14 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    ProcessCollector,
+    Summary,
+)
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from heart import __version__
@@ -39,7 +46,7 @@ from heart.api.schemas import (
     PredictionResponse,
     ReadyResponse,
 )
-from heart.config import MODELS_DIR
+from heart.config import FEATURES, MODELS_DIR, NUMERIC_FEATURES
 from heart.packaging import ModelPackageError
 from heart.predict import Predictor
 
@@ -72,6 +79,79 @@ class ModelMetrics:
             ["endpoint"],
             registry=registry,
         )
+        self.inference_seconds = Histogram(
+            "heart_inference_seconds",
+            "Time spent in the model itself (preprocessing + predict + explanations)",
+            buckets=[0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+            registry=registry,
+        )
+        # Live input statistics. A Summary without quantiles is just _sum and _count, so
+        # rate(_sum) / rate(_count) is the mean value seen recently, per feature.
+        self.feature_value = Summary(
+            "heart_input_feature",
+            "Numeric feature values received (mean = rate(_sum) / rate(_count))",
+            ["feature"],
+            registry=registry,
+        )
+        self.missing_features = Counter(
+            "heart_missing_features_total",
+            "Features sent as null or left out (the model imputes them)",
+            ["feature"],
+            registry=registry,
+        )
+        # What the loaded model is, and its training-time baseline to compare live traffic with
+        self.model_info = Gauge(
+            "heart_model_info",
+            "The model being served (always 1; the labels carry the information)",
+            ["model_version", "estimator"],
+            registry=registry,
+        )
+        self.model_loaded = Gauge(
+            "heart_model_loaded", "1 if the model is loaded and serving", registry=registry
+        )
+        self.threshold = Gauge(
+            "heart_model_decision_threshold",
+            "Probability at or above which a patient is flagged",
+            registry=registry,
+        )
+        self.reference_positive_rate = Gauge(
+            "heart_reference_positive_rate",
+            "Share of patients flagged on held-out training data (out-of-fold)",
+            registry=registry,
+        )
+        self.reference_mean = Gauge(
+            "heart_reference_feature_mean",
+            "Training-set mean of each numeric feature",
+            ["feature"],
+            registry=registry,
+        )
+        self.reference_std = Gauge(
+            "heart_reference_feature_std",
+            "Training-set standard deviation of each numeric feature",
+            ["feature"],
+            registry=registry,
+        )
+
+    def describe_model(self, predictor: Predictor) -> None:
+        meta = predictor.metadata
+        self.model_loaded.set(1)
+        self.model_info.labels(meta["model_version"], meta["estimator"]).set(1)
+        self.threshold.set(predictor.threshold)
+        reference = meta.get("reference")  # absent in models packaged before Phase 8
+        if reference:
+            self.reference_positive_rate.set(reference["positive_rate"])
+            for name, stats in reference["numeric"].items():
+                self.reference_mean.labels(name).set(stats["mean"])
+                self.reference_std.labels(name).set(stats["std"])
+
+    def observe_inputs(self, records: list[dict]) -> None:
+        for record in records:
+            for name in FEATURES:
+                value = record.get(name)
+                if value is None:
+                    self.missing_features.labels(name).inc()
+                elif name in NUMERIC_FEATURES:
+                    self.feature_value.labels(name).observe(value)
 
 
 @asynccontextmanager
@@ -82,6 +162,7 @@ async def lifespan(app: FastAPI):
     app.state.load_error = None
     try:
         app.state.predictor = Predictor(models_dir)
+        app.state.metrics.describe_model(app.state.predictor)
         log.info(
             "model loaded",
             extra={"model_version": app.state.predictor.model_version, "dir": str(models_dir)},
@@ -138,7 +219,10 @@ async def validation_error(request: Request, exc: RequestValidationError):
 def _respond(request: Request, patients: list[Patient]) -> list[PredictionResponse]:
     predictor = get_predictor(request)
     metrics: ModelMetrics = request.app.state.metrics
-    results = predictor.predict([p.model_dump() for p in patients])
+    records = [p.model_dump() for p in patients]
+    metrics.observe_inputs(records)
+    with metrics.inference_seconds.time():
+        results = predictor.predict(records)
     for r in results:
         metrics.predictions.labels(label=r.label).inc()
         metrics.probability.observe(r.probability)
@@ -230,11 +314,19 @@ def create_app(models_dir: Path | str | None = None) -> FastAPI:
     # and the model metrics; /metrics serves exactly this registry.
     registry = CollectorRegistry()
     app.state.metrics = ModelMetrics(registry)
+    # CPU and memory of this process (process_cpu_seconds_total, process_resident_memory_bytes).
+    # A fresh collector reads the same /proc data the global one does.
+    ProcessCollector(registry=registry)
     Instrumentator(
         excluded_handlers=["/metrics", "/health", "/ready"],
         should_group_status_codes=False,
         registry=registry,
-    ).instrument(app).expose(app, include_in_schema=False)
+    ).instrument(
+        app,
+        # Per-endpoint latency histogram; the default (0.1, 0.5, 1) is too coarse for a
+        # model that answers in a few milliseconds
+        latency_lowr_buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+    ).expose(app, include_in_schema=False)
     return app
 
 

@@ -1,0 +1,61 @@
+# Lean monitoring for one small VM: one Prometheus and one Grafana, about 180 MiB of RAM
+# together (measured). kube-prometheus-stack is the full-featured alternative, but it
+# needs well over 1 GB.
+
+# Namespaces whose pods Prometheus scrapes. A pod is scraped when it has the annotation
+# prometheus.io/scrape: "true" (the heart-api chart adds it). Prometheus gets read-only
+# access to pods in exactly these namespaces, nothing else.
+scrapeNamespaces: [heart]
+
+prometheus:
+  image:
+    repository: prom/prometheus
+    tag: v3.13.4
+    pullPolicy: IfNotPresent
+  scrapeInterval: 15s
+  # Whichever limit is reached first: drop data older than retention, or beyond the size
+  retention: 7d
+  retentionSize: 1GB
+  persistence:
+    # Keeps metrics across pod restarts. k3s's built-in local-path storage class backs it.
+    enabled: true
+    size: 2Gi
+    storageClass: ""  # "" = the cluster's default class
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+
+grafana:
+  image:
+    repository: grafana/grafana
+    tag: 13.0.10
+    pullPolicy: IfNotPresent
+  # Read-only dashboard access without logging in (good for demos and screenshots).
+  # Editing needs the admin login; its password is generated at install and kept in a
+  # Secret (./run.sh monitoring-status prints it).
+  anonymousViewer: true
+  adminUser: admin
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 384Mi}
+
+# Both UIs on the same Traefik Ingress (port 80) as the API, by path:
+#   http://<vm-ip>/grafana      http://<vm-ip>/prometheus
+# The more specific paths win over the API's "/". Prometheus has no login of its own:
+# set prometheus.ingress false to keep it inside the cluster (kubectl port-forward).
+ingress:
+  className: traefik
+  host: ""
+  grafana: true
+  prometheus: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

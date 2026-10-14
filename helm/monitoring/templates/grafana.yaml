@@ -1,0 +1,144 @@
+{{- $sel := dict "name" "grafana" "root" . -}}
+{{- /* Keep the generated admin password across upgrades: reuse the Secret if it exists */ -}}
+{{- $secretName := printf "%s-grafana" .Release.Name -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $password := "" -}}
+{{- if $existing }}
+{{- $password = index $existing.data "admin-password" | b64dec -}}
+{{- else }}
+{{- $password = randAlphaNum 20 -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+type: Opaque
+data:
+  admin-user: {{ .Values.grafana.adminUser | b64enc | quote }}
+  admin-password: {{ $password | b64enc | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+    {{- include "monitoring.selector" $sel | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "monitoring.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitoring.labels" . | nindent 8 }}
+        {{- include "monitoring.selector" $sel | nindent 8 }}
+      annotations:
+        # Restart Grafana when a dashboard or the provisioning changes
+        checksum/config: {{ include (print $.Template.BasePath "/grafana-config.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false # Grafana never talks to the Kubernetes API
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        # The image's "grafana" user
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+          imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef: {name: {{ $secretName }}, key: admin-user}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ $secretName }}, key: admin-password}
+            # Served under /grafana on the shared Ingress
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: {{ .Values.grafana.anonymousViewer | quote }}
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/heart-api.json
+            # No phoning home and no plugin downloads at startup: faster, works offline
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES
+              value: "false"
+            - name: GF_PLUGINS_PREINSTALL_DISABLED
+              value: "true"
+            - name: GF_NEWS_NEWS_FEED_ENABLED
+              value: "false"
+            - name: GF_LOG_MODE
+              value: console
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /grafana/api/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /grafana/api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            # Grafana's own database (users, sessions). Everything that matters is
+            # provisioned from files, so it doesn't need to survive a restart.
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: provisioning
+          configMap:
+            name: {{ .Release.Name }}-grafana-provisioning
+        - name: dashboards
+          configMap:
+            name: {{ .Release.Name }}-grafana-dashboards
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "monitoring.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

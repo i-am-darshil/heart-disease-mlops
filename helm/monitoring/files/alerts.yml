@@ -1,0 +1,135 @@
+# Prometheus rules for the heart-disease API. Loaded by Prometheus from a ConfigMap and
+# unit-tested by promtool (tests/monitoring/alerts_test.yml), so a typo can't ship.
+#
+# Recording rules precompute a query under a name (level:metric:window); the alerts and
+# the dashboard reuse them. Alerts fire after their condition has held for `for:`.
+# Firing alerts are listed at http://<vm-ip>/prometheus/alerts and on the dashboard.
+
+groups:
+  - name: heart-api.recording
+    rules:
+      - record: heart:requests:rate5m
+        expr: sum(rate(http_requests_total{job="heart-api"}[5m]))
+
+      # Share of requests that failed on the server side (5xx). `or vector(0)`: no 5xx
+      # series exists until the first 5xx, and a missing numerator would mean "no data"
+      - record: heart:server_error_ratio:rate5m
+        expr: |
+          (sum(rate(http_requests_total{job="heart-api", status=~"5.."}[5m])) or vector(0))
+            / (sum(rate(http_requests_total{job="heart-api"}[5m])) > 0)
+
+      # Share of requests rejected by input validation (422)
+      - record: heart:validation_error_ratio:rate5m
+        expr: |
+          (sum(rate(http_requests_total{job="heart-api", status="422"}[5m])) or vector(0))
+            / (sum(rate(http_requests_total{job="heart-api"}[5m])) > 0)
+
+      - record: heart:predict_latency_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="heart-api", handler="/predict"}[5m])))
+
+      # Share of patients flagged as "heart disease" recently. On the training data's
+      # held-out folds it was heart_reference_positive_rate; a large gap means the patients
+      # (or the model) changed.
+      - record: heart:positive_rate:rate15m
+        expr: |
+          sum(rate(heart_predictions_total{job="heart-api", label="heart disease"}[15m]))
+            / sum(rate(heart_predictions_total{job="heart-api"}[15m]))
+
+      # How far the recent mean of each numeric input is from its training mean, in
+      # training standard deviations: 0 = same as training, 1 = shifted by one SD
+      - record: heart:feature_mean_shift_sd:rate10m
+        expr: |
+          (
+            sum by (feature) (rate(heart_input_feature_sum{job="heart-api"}[10m]))
+              / sum by (feature) (rate(heart_input_feature_count{job="heart-api"}[10m]))
+            - on (feature) max by (feature) (heart_reference_feature_mean{job="heart-api"})
+          )
+          / on (feature) max by (feature) (heart_reference_feature_std{job="heart-api"})
+
+  - name: heart-api.alerts
+    rules:
+      # --- Availability ---------------------------------------------------------------
+      - alert: HeartApiDown
+        expr: absent(up{job="heart-api"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: No heart-api pod is answering
+          description: Prometheus can't scrape any heart-api pod. Check `./run.sh k8s-status`.
+
+      - alert: HeartApiTargetDown
+        expr: up{job="heart-api"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.pod }} isn't answering"
+          description: "Prometheus can't scrape {{ $labels.pod }} (crashed, overloaded or being replaced)."
+
+      - alert: HeartModelNotLoaded
+        expr: heart_model_loaded{job="heart-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod {{ $labels.pod }} is running without a model"
+          description: The model package failed to load (see /ready and the pod's logs); the pod gets no traffic.
+
+      # --- Errors and latency ---------------------------------------------------------
+      - alert: HeartApiServerErrors
+        expr: heart:server_error_ratio:rate5m > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests fail with a server error"
+          description: More than 5% of requests returned 5xx over the last 5 minutes.
+
+      - alert: HeartApiInvalidInputSpike
+        expr: heart:validation_error_ratio:rate5m > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests are rejected as invalid"
+          description: A client is sending malformed patient records, or expects a different input contract.
+
+      - alert: HeartApiSlowPredictions
+        expr: heart:predict_latency_seconds:p95_5m > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "/predict p95 latency is {{ $value | humanizeDuration }}"
+          description: 95th percentile latency of /predict has been above 500 ms for 5 minutes.
+
+      # --- Model behaviour (drift) ----------------------------------------------------
+      # Only judged with enough traffic: 100+ predictions / inputs in the window
+      - alert: HeartPredictionDrift
+        expr: |
+          abs(heart:positive_rate:rate15m - scalar(max(heart_reference_positive_rate{job="heart-api"}))) > 0.2
+            and sum(increase(heart_predictions_total{job="heart-api"}[15m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} gap between live and training positive rates"
+          description: >-
+            The share of patients flagged differs from the training baseline by more than
+            20 points. The patient population may have changed; consider retraining.
+
+      - alert: HeartInputDrift
+        expr: |
+          abs(heart:feature_mean_shift_sd:rate10m) > 0.5
+            and on (feature) sum by (feature) (increase(heart_input_feature_count{job="heart-api"}[10m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.feature }} has drifted {{ $value | printf \"%.1f\" }} SD from training"
+          description: >-
+            The recent mean of {{ $labels.feature }} is more than half a training standard
+            deviation away from its training mean.

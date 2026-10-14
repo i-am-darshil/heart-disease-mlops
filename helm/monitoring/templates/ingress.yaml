@@ -1,0 +1,34 @@
+{{- if or .Values.ingress.grafana .Values.ingress.prometheus }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "monitoring.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          {{- if .Values.ingress.grafana }}
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-grafana
+                port:
+                  name: http
+          {{- end }}
+          {{- if .Values.ingress.prometheus }}
+          - path: /prometheus
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-prometheus
+                port:
+                  name: http
+          {{- end }}
+{{- end }}

@@ -283,6 +283,25 @@ rollback() {
     helm history heart-api -n "$ns" --max 3
 }
 
+# Traffic for the dashboard: ./run.sh load [normal|drift|errors] [seconds]
+load() {
+    local scenario="${1:-normal}" duration="${2:-120}" url="${LOAD_URL:-}"
+    command -v python3 >/dev/null 2>&1 || die "python3 is needed (sudo dnf -y install python3)."
+    if [ -z "$url" ]; then
+        # The Kubernetes Ingress if it answers, else the local API container
+        local ip
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        if [ -n "$ip" ] && curl -sf "http://$ip/ready" >/dev/null 2>&1; then
+            url="http://$ip"
+        else
+            url="http://127.0.0.1:$API_PORT"
+        fi
+    fi
+    step "Sending $scenario traffic to $url for ${duration}s (Ctrl+C stops early)"
+    python3 "$PROJECT_DIR/scripts/load_test.py" --url "$url" --scenario "$scenario" \
+        --duration "$duration" --rps "${RPS:-10}"
+}
+
 reset_mlflow() {
     step "Deleting the local MLflow store (mlflow.db, mlartifacts/)"
     rm -rf "$PROJECT_DIR/mlflow.db" "$PROJECT_DIR/mlartifacts"
@@ -338,6 +357,13 @@ ${BOLD}Kubernetes (Phase 7)${RESET}
   autodeploy-off  Stop automatic deploys
   deploy-status   Is auto-deploy on, and its recent log
 
+${BOLD}Monitoring (Phase 8)${RESET}
+  monitoring        Install Prometheus + Grafana on k3s, with alert rules and a dashboard
+  monitoring-status Pods, scrape targets, firing alerts, URLs and the Grafana login
+  monitoring-down   Remove Prometheus + Grafana (the API keeps running)
+  load [scenario] [seconds]
+                    Send traffic so the dashboard has data: normal (default), drift, errors
+
 ${BOLD}Interactive${RESET}
   jupyter      Jupyter Lab on http://127.0.0.1:$JUPYTER_PORT  (builds a second image with Jupyter)
   shell        Open a bash shell inside the container
@@ -347,6 +373,7 @@ ${BOLD}Housekeeping${RESET}
   clean        Remove the Docker images (keeps all outputs)
 
 Ports can be changed: MLFLOW_PORT=5051 ./run.sh mlflow, API_PORT=8001 ./run.sh serve
+Load: RPS=20 ./run.sh load drift 300; LOAD_URL=http://host:port picks the target
 Jupyter's login token is "heart"; change it with JUPYTER_TOKEN=... ./run.sh jupyter
 EOF
 }
@@ -356,6 +383,7 @@ main() {
     [ $# -gt 0 ] && shift
     case "$cmd" in
         help | -h | --help) usage; return ;;
+        load) load "${1:-}" "${2:-}"; return ;; # plain python3, no Docker needed
     esac
     resolve_docker
     case "$cmd" in
@@ -384,6 +412,9 @@ main() {
         autodeploy-on) bash "$PROJECT_DIR/scripts/autodeploy.sh" on ;;
         autodeploy-off) bash "$PROJECT_DIR/scripts/autodeploy.sh" off ;;
         deploy-status) bash "$PROJECT_DIR/scripts/autodeploy.sh" status ;;
+        monitoring) bash "$PROJECT_DIR/scripts/monitoring.sh" up ;;
+        monitoring-status) bash "$PROJECT_DIR/scripts/monitoring.sh" status ;;
+        monitoring-down) bash "$PROJECT_DIR/scripts/monitoring.sh" down ;;
         api-test) api_test ;;
         api-logs) api_logs ;;
         api-stop) api_stop ;;
