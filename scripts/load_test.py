@@ -7,7 +7,7 @@
 
 Patients are sampled from the real (processed) UCI data, with a little noise, and some
 fields are dropped to exercise imputation. Standard library only, so it runs anywhere
-Python 3 does (the VM's system python3 is enough; no virtualenv needed).
+Python 3 does (no type hints either, so even EL8's system python3.6 runs it).
 """
 
 import argparse
@@ -28,7 +28,7 @@ NUMERIC = {"age": (1, 120), "trestbps": (50, 250), "chol": (50, 700), "thalach":
 CODED = ["cp", "restecg", "slope", "ca", "thal", "sex", "fbs", "exang"]
 
 
-def load_patients() -> list[dict]:
+def load_patients():
     with DATA.open() as f:
         rows = list(csv.DictReader(f))
     patients = []
@@ -38,7 +38,7 @@ def load_patients() -> list[dict]:
     return patients
 
 
-def jitter(patient: dict, rng: random.Random) -> dict:
+def jitter(patient, rng):
     p = dict(patient)
     for name, (low, high) in NUMERIC.items():
         if p[name] is not None:
@@ -51,7 +51,7 @@ def jitter(patient: dict, rng: random.Random) -> dict:
     return p
 
 
-def drifted(patient: dict, rng: random.Random) -> dict:
+def drifted(patient, rng):
     """A population shift: older patients, higher cholesterol, lower max heart rate."""
     p = jitter(patient, rng)
     p["age"] = min(100, (p["age"] or 55) + 15)
@@ -61,11 +61,11 @@ def drifted(patient: dict, rng: random.Random) -> dict:
     return p
 
 
-def invalid(rng: random.Random) -> dict:
+def invalid(rng):
     return rng.choice([{"age": 500}, {"cp": 9}, {"sex": "male"}, {"cholesterol": 200}])
 
 
-def build_request(base: str, scenario: str, patients: list[dict], rng: random.Random):
+def build_request(base, scenario, patients, rng):
     if scenario == "errors" and rng.random() < 0.3:
         return base + "/predict", invalid(rng)
     make = drifted if scenario == "drift" else jitter
@@ -75,7 +75,7 @@ def build_request(base: str, scenario: str, patients: list[dict], rng: random.Ra
     return base + "/predict", make(rng.choice(patients), rng)
 
 
-def send(url: str, body: dict) -> tuple[int, float]:
+def send(url, body):
     data = json.dumps(body).encode()
     req = urllib.request.Request(url, data, {"Content-Type": "application/json"})
     start = time.perf_counter()
@@ -90,7 +90,7 @@ def send(url: str, body: dict) -> tuple[int, float]:
     return status, time.perf_counter() - start
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--url", default="http://127.0.0.1", help="API base URL")
     parser.add_argument("--rps", type=float, default=10, help="requests per second")
@@ -109,14 +109,14 @@ def main(argv: list[str] | None = None) -> int:
 
     patients = load_patients()
     rng = random.Random(args.seed)
-    statuses: Counter = Counter()
-    latencies: list[float] = []
+    statuses = Counter()
+    latencies = []
     lock = threading.Lock()
     deadline = time.monotonic() + args.duration
     stopped = threading.Event()
     interval = args.workers / args.rps  # each worker sends one request per interval
 
-    def worker(seed: int) -> None:
+    def worker(seed):
         wrng = random.Random(seed)
         next_at = time.monotonic() + wrng.uniform(0, interval)  # stagger workers
         while next_at < deadline and not stopped.is_set():
