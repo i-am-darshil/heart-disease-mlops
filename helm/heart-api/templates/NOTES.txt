@@ -1,0 +1,14 @@
+heart-api {{ include "heart-api.tag" . }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "heart-api.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} get pods,svc,ingress -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Reach it:
+{{- if .Values.ingress.enabled }}
+  Ingress (Traefik, port 80):   curl http://<node-ip>{{ .Values.ingress.path }}health
+{{- end }}
+{{- if eq .Values.service.type "LoadBalancer" }}
+  LoadBalancer service:         kubectl -n {{ .Release.Namespace }} get svc {{ include "heart-api.fullname" . }}   (EXTERNAL-IP column)
+{{- end }}
+  Without either:               kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "heart-api.fullname" . }} 8000:{{ .Values.service.port }}

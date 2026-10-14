@@ -1,0 +1,11 @@
+apiVersion: v2
+name: heart-api
+description: Heart disease risk prediction API (FastAPI + scikit-learn)
+type: application
+# Chart version: bump when the templates change
+version: 0.1.0
+# Default image tag when none is given; CI deploys pass --set image.tag=<sha12>
+appVersion: "latest"
+home: https://github.com/i-am-darshil/heart-disease-mlops
+sources:
+  - https://github.com/i-am-darshil/heart-disease-mlops

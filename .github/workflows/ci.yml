@@ -1,8 +1,11 @@
 # CI/CD pipeline
 #
 #   ci-image ──► lint ─────────┐
-#   workflow-lint ─────────────┴─► test ──┬──► train ──► api-image ──► (deploy: Phase 7)
-#                                         └──► reproduce
+#   workflow-lint, helm-lint ──┴─► test ──┬──► train ──► api-image
+#                                         └──► reproduce          │
+#                                                                 ▼
+#            GHCR: heart-disease-api:<sha12>, :latest ──► VM auto-deploy timer pulls it
+#                                                         (scripts/autodeploy.sh)
 #
 # ci-image  builds the `pipeline` Docker image (Python 3.10 + pinned deps) and pushes it
 #           to GHCR. Every later job runs *inside* that image, the same environment as
@@ -10,6 +13,10 @@
 # api-image builds the slim serving image with the model trained in this run, smoke-tests
 #           the running container, and on main pushes it to GHCR as
 #           ghcr.io/<owner>/heart-disease-api:<sha> (+ :latest).
+# helm-lint validates the Kubernetes chart (helm lint + schema check of rendered manifests).
+#
+# Deployment is pull-based: GitHub never connects to the VM. A systemd timer on the VM
+# notices the new :latest, runs `helm upgrade` + `helm test`, and rolls back on failure.
 #
 # workflow-lint runs actionlint on this file, so a broken workflow fails CI too.
 # Any failing step fails its job and skips everything downstream (`needs:`).
@@ -99,7 +106,7 @@ jobs:
         run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color
 
   test:
-    needs: [ci-image, lint, workflow-lint]
+    needs: [ci-image, lint, workflow-lint, helm-lint]
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.ci-image.outputs.image }}
@@ -265,3 +272,16 @@ jobs:
             echo "docker pull $image:${GITHUB_SHA::12}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Validates the Helm chart: helm lint, then every rendered manifest against the
+  # Kubernetes 1.36 API schema (catches typos like a misspelled field before deploy).
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
+      - run: helm lint helm/heart-api --strict
+      - name: Validate rendered manifests
+        run: scripts/validate-chart.sh

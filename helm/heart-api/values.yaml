@@ -1,0 +1,104 @@
+# Default values for the heart-api chart. Override with --set key=value or -f my-values.yaml.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/i-am-darshil/heart-disease-api
+  # Deploy an immutable commit tag (e.g. 759f3d01aefb). "" falls back to Chart.appVersion.
+  tag: ""
+  # IfNotPresent: commit tags never change, so a cached image is always the right one
+  pullPolicy: IfNotPresent
+
+# For a private registry: kubectl create secret docker-registry ghcr ... and list it here
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  # LoadBalancer: k3s's built-in load balancer (ServiceLB) exposes it on the node's IP at
+  # this port. Not 80: Traefik (the Ingress) already holds port 80 on the node, and two
+  # LoadBalancers can't share a port, so ours would stay <pending> forever.
+  # Use ClusterIP if only the Ingress should be reachable.
+  type: LoadBalancer
+  port: 8080
+  targetPort: 8000
+
+ingress:
+  enabled: true
+  # k3s ships the Traefik ingress controller
+  className: traefik
+  # Empty host = match any hostname, so http://<vm-ip>/ works without DNS setup
+  host: ""
+  path: /
+  annotations: {}
+  tls: []
+
+# Extra environment variables for the API container
+env:
+  LOG_LEVEL: info
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    # No CPU limit on purpose: CPU throttling hurts latency; requests still reserve capacity
+    memory: 512Mi
+
+# /health = liveness (restart if the process hangs); /ready = readiness (send traffic
+# only once the model is loaded); startup gives the model time to load on cold start
+probes:
+  startup:
+    path: /ready
+    periodSeconds: 2
+    failureThreshold: 30
+  readiness:
+    path: /ready
+    periodSeconds: 5
+    failureThreshold: 3
+  liveness:
+    path: /health
+    periodSeconds: 10
+    failureThreshold: 3
+
+# Zero-downtime rollouts: bring a new pod up and ready before taking an old one down
+strategy:
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# Keep at least one pod during voluntary disruptions (node drain, upgrades)
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# The image runs as uid 10001 (non-root); enforce it and drop everything else
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Prometheus (Phase 8) discovers pods by these annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

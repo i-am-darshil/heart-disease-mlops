@@ -1,0 +1,189 @@
+# GENERATED from the Helm chart in helm/heart-api; do not edit by hand.
+# Regenerate: make k8s-manifests
+#
+# For clusters without Helm:
+#   kubectl create namespace heart
+#   kubectl -n heart apply -f k8s/heart-api.yaml
+# Prefer `./run.sh deploy` (Helm): it adds release history, rollback and helm test.
+---
+# Source: heart-api/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heart-api
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/instance: heart-api
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heart-api
+      app.kubernetes.io/instance: heart-api
+
+---
+# Source: heart-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: heart-api
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/instance: heart-api
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/instance: heart-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+# Source: heart-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heart-api
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/instance: heart-api
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5 # kept for `helm rollback` / `kubectl rollout undo`
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heart-api
+      app.kubernetes.io/instance: heart-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heart-api
+        app.kubernetes.io/instance: heart-api
+        app.kubernetes.io/version: "latest"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: heart-disease-mlops
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8000"
+        prometheus.io/scrape: "true"
+    spec:
+      automountServiceAccountToken: false # the API never talks to the Kubernetes API
+      securityContext:
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread replicas across nodes when there is more than one
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: heart-api
+              app.kubernetes.io/instance: heart-api
+      # uvicorn finishes in-flight requests on SIGTERM; give it time before a hard kill
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          image: "ghcr.io/i-am-darshil/heart-disease-api:latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            # Let the endpoint removal propagate before uvicorn stops accepting
+            # connections, so no request hits a terminating pod
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Root filesystem is read-only; give Python a writable scratch dir
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+
+---
+# Source: heart-api/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: heart-api
+  labels:
+    app.kubernetes.io/name: heart-api
+    app.kubernetes.io/instance: heart-api
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: heart-disease-mlops
+spec:
+  ingressClassName: traefik
+  rules:
+    -
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: heart-api
+                port:
+                  name: http

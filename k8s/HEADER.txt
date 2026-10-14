@@ -1,0 +1,7 @@
+# GENERATED from the Helm chart in helm/heart-api; do not edit by hand.
+# Regenerate: make k8s-manifests
+#
+# For clusters without Helm:
+#   kubectl create namespace heart
+#   kubectl -n heart apply -f k8s/heart-api.yaml
+# Prefer `./run.sh deploy` (Helm): it adds release history, rollback and helm test.

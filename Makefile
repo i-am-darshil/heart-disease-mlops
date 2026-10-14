@@ -14,7 +14,7 @@ export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup data eda notebook train reproduce predict serve mlflow-ui lint format test clean
+.PHONY: help setup data eda notebook train reproduce predict serve k8s-manifests mlflow-ui lint format test clean
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -48,6 +48,10 @@ predict:  ## Predict for examples/sample_request.json (INPUT=path to use another
 
 serve:  ## Run the API locally with auto-reload (http://127.0.0.1:8000/docs)
 	$(BIN)/uvicorn heart.api.main:app --host 127.0.0.1 --port 8000 --reload
+
+k8s-manifests:  ## Regenerate plain Kubernetes YAML (k8s/heart-api.yaml) from the Helm chart
+	{ sed -n '1,7p' k8s/HEADER.txt; helm template heart-api helm/heart-api --namespace heart \
+	    --set image.tag=latest --skip-tests | grep -v "helm.sh/chart"; } > k8s/heart-api.yaml
 
 mlflow-ui:  ## Open the MLflow UI for the local tracking store (http://127.0.0.1:5050)
 	$(BIN)/mlflow ui --backend-store-uri sqlite:///mlflow.db --host $(MLFLOW_HOST) --port $(MLFLOW_PORT)

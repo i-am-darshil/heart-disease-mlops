@@ -244,6 +244,45 @@ pull() {
     printf '  Start it: ./run.sh serve\n'
 }
 
+k8s_status() {
+    command -v kubectl >/dev/null 2>&1 || die "kubectl not found. Run ./run.sh k8s-setup first."
+    local ns="${NAMESPACE:-heart}"
+    step "Cluster"
+    kubectl get nodes -o wide
+    step "heart-api in namespace '$ns'"
+    kubectl -n "$ns" get deploy,pods,svc,ingress,pdb -o wide 2>/dev/null \
+        || warn "Nothing deployed yet: ./run.sh deploy"
+    step "Release history"
+    helm history heart-api -n "$ns" --max 5 2>/dev/null || true
+    local ip
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    step "Reach it"
+    printf '  Ingress (port 80):        http://%s/docs      curl http://%s/health\n' "${ip:-<vm-ip>}" "${ip:-<vm-ip>}"
+    printf '  LoadBalancer (port 8080): http://%s:8080/docs\n' "${ip:-<vm-ip>}"
+}
+
+k8s_test() {
+    local ip base
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    base="http://${ip:-127.0.0.1}"
+    step "helm test (a pod inside the cluster calls the Service)"
+    helm test heart-api -n "${NAMESPACE:-heart}" --logs | grep -E "^OK |Phase"
+    step "Through the Ingress: $base/"
+    curl -s "$base/health"; printf '\n'
+    curl -s -X POST "$base/predict" -H 'Content-Type: application/json' \
+        -d @"$PROJECT_DIR/examples/sample_request.json"; printf '\n'
+    step "Through the LoadBalancer: $base:8080/"
+    curl -s "$base:8080/ready"; printf '\n'
+    ok "Kubernetes deployment answers on both routes"
+}
+
+rollback() {
+    local ns="${NAMESPACE:-heart}"
+    step "Rolling back heart-api ${1:+to revision $1}"
+    helm rollback heart-api ${1:+"$1"} -n "$ns" --wait --timeout 5m
+    helm history heart-api -n "$ns" --max 3
+}
+
 reset_mlflow() {
     step "Deleting the local MLflow store (mlflow.db, mlartifacts/)"
     rm -rf "$PROJECT_DIR/mlflow.db" "$PROJECT_DIR/mlartifacts"
@@ -289,6 +328,16 @@ ${BOLD}API (Phase 5)${RESET}
   api-logs     Follow the API's JSON request logs (Ctrl+C to stop following)
   api-stop     Stop the API container
 
+${BOLD}Kubernetes (Phase 7)${RESET}
+  k8s-setup    One-time: install k3s + Helm on this VM, open the firewall
+  deploy [tag] Deploy to k3s: newest CI image, a commit tag, or --local (your own build)
+  k8s-status   Nodes, pods, services, ingress, release history, URLs
+  k8s-test     helm test + requests through the Ingress and the LoadBalancer
+  rollback [n] Roll back to the previous (or a given) Helm revision
+  autodeploy-on   Deploy new CI images automatically (checks GHCR every 5 min)
+  autodeploy-off  Stop automatic deploys
+  deploy-status   Is auto-deploy on, and its recent log
+
 ${BOLD}Interactive${RESET}
   jupyter      Jupyter Lab on http://127.0.0.1:$JUPYTER_PORT  (builds a second image with Jupyter)
   shell        Open a bash shell inside the container
@@ -327,6 +376,14 @@ main() {
         serve-build) serve_build ;;
         serve) serve ;;
         pull) pull "${1:-}" ;;
+        k8s-setup) bash "$PROJECT_DIR/scripts/k3s-setup.sh" ;;
+        deploy) "$PROJECT_DIR/scripts/deploy.sh" "$@" ;;
+        k8s-status) k8s_status ;;
+        k8s-test) k8s_test ;;
+        rollback) rollback "${1:-}" ;;
+        autodeploy-on) bash "$PROJECT_DIR/scripts/autodeploy.sh" on ;;
+        autodeploy-off) bash "$PROJECT_DIR/scripts/autodeploy.sh" off ;;
+        deploy-status) bash "$PROJECT_DIR/scripts/autodeploy.sh" status ;;
         api-test) api_test ;;
         api-logs) api_logs ;;
         api-stop) api_stop ;;
