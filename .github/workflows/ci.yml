@@ -1,7 +1,18 @@
-# CI pipeline. Grows phase by phase:
-#   lint -> test -> train -> api-image (build + smoke test)
-#                \-> reproduce
-# Pushing the image to a registry and deploying come in Phases 6-7.
+# CI/CD pipeline
+#
+#   ci-image ──► lint ─────────┐
+#   workflow-lint ─────────────┴─► test ──┬──► train ──► api-image ──► (deploy: Phase 7)
+#                                         └──► reproduce
+#
+# ci-image  builds the `pipeline` Docker image (Python 3.10 + pinned deps) and pushes it
+#           to GHCR. Every later job runs *inside* that image, the same environment as
+#           ./run.sh on the VM, so CI results match local results exactly.
+# api-image builds the slim serving image with the model trained in this run, smoke-tests
+#           the running container, and on main pushes it to GHCR as
+#           ghcr.io/<owner>/heart-disease-api:<sha> (+ :latest).
+#
+# workflow-lint runs actionlint on this file, so a broken workflow fails CI too.
+# Any failing step fails its job and skips everything downstream (`needs:`).
 name: CI
 
 on:
@@ -9,57 +20,131 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: # "Run workflow" button on the Actions tab
+
+# One run per branch/PR at a time; a newer push cancels the older, now-stale run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: jobs ask for more only where needed
+permissions:
+  contents: read
+
+# bash with -e -o pipefail for every `run:` step. Without pipefail, `pytest | tee log`
+# would report tee's exit code (always 0) and failing tests would NOT fail the job.
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+env:
+  REGISTRY: ghcr.io
+  # Image names must be lowercase; github.repository_owner may not be
+  CI_IMAGE: ghcr.io/${{ github.repository_owner }}/heart-disease-ci
+  API_IMAGE: ghcr.io/${{ github.repository_owner }}/heart-disease-api
+  MLFLOW_DISABLE_AGENT_HINT: "1"
 
 jobs:
+  ci-image:
+    name: Build CI image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: name
+        # Tag by the hash of everything that goes into the image: unchanged deps => same tag,
+        # so the build is a cache hit and jobs pull an image that's already there
+        run: |
+          owner=$(echo "$CI_IMAGE" | tr '[:upper:]' '[:lower:]')
+          deps=$(cat Dockerfile requirements*.txt pyproject.toml | sha256sum | cut -c1-12)
+          echo "image=$owner:deps-$deps" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: pipeline
+          push: true
+          tags: ${{ steps.name.outputs.image }}
+          cache-from: type=gha,scope=pipeline
+          cache-to: type=gha,scope=pipeline,mode=max
+
   lint:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: ruff check --output-format=github .  # annotates offending lines in the PR diff
+      - run: ruff format --check --diff .
+
+  # Lints this workflow file itself: bad expressions, wrong `needs:`, shell bugs
+  workflow-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-      - run: pip install ruff==0.17.0
-      - run: ruff check .
-      - run: ruff format --check .
+      - uses: actions/checkout@v7
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -color
 
   test:
-    needs: lint  # only runs if lint passed
+    needs: [ci-image, lint, workflow-lint]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-      - run: pip install -r requirements-dev.txt && pip install -e .
-      - run: pytest --cov=heart --cov-report=xml --junitxml=reports/junit.xml
+      - uses: actions/checkout@v7
+      # The image has `heart` installed from its own copy of src/; point it at this checkout
+      - run: pip install --no-deps -e .
+      - run: |
+          pytest --cov=heart --cov-report=xml --cov-report=term \
+                 --junitxml=reports/junit.xml | tee reports/pytest.txt
+      - name: Test summary
+        if: always()
+        run: python scripts/ci_summary.py tests reports/junit.xml coverage.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Upload test reports
-        if: always()  # upload even when tests fail, so the logs are inspectable
-        uses: actions/upload-artifact@v4
+        if: always() # keep the reports even when tests fail, so the failure is inspectable
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports
           path: |
             reports/junit.xml
+            reports/pytest.txt
             coverage.xml
 
   train:
-    needs: test
+    needs: [ci-image, test]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-      - run: pip install -r requirements.txt && pip install -e .
+      - uses: actions/checkout@v7
+      - run: pip install --no-deps -e .
       # Exits non-zero if the quality gate fails, which fails this job and the whole run.
-      # Every run (passed or failed) is logged to a fresh MLflow store on the runner.
+      # Every run (passed or failed) is logged to a fresh MLflow store in the workspace.
       - run: python -m heart.train
-        env:
-          MLFLOW_DISABLE_AGENT_HINT: "1"
+      - name: Training summary
+        if: always()
+        run: python scripts/ci_summary.py train models/metrics.json models/model_metadata.json >> "$GITHUB_STEP_SUMMARY"
       - name: Upload model and evaluation artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: model-${{ github.sha }}
           path: |
@@ -68,59 +153,78 @@ jobs:
             models/metrics.json
             reports/figures/model_*.png
       # The runner is wiped after the job, so keep its MLflow store. Download it and run
-      # `mlflow ui --backend-store-uri sqlite:///mlflow.db` to browse this CI run's experiments.
+      # `mlflow ui --backend-store-uri sqlite:///mlflow.db` to browse this run's experiments.
       - name: Upload MLflow tracking store
-        if: always()  # keep the record of failed runs too
-        uses: actions/upload-artifact@v4
+        if: always() # keep the record of failed runs too
+        uses: actions/upload-artifact@v7
         with:
           name: mlflow-${{ github.sha }}
           path: |
             mlflow.db
             mlartifacts/
 
-  # Trains twice from scratch on a fresh runner and fails unless both models are
-  # byte-identical with identical predictions and metrics.
+  # Trains twice from scratch and fails unless both models are byte-identical with
+  # identical predictions and metrics.
   reproduce:
-    needs: test
+    needs: [ci-image, test]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-      - run: pip install -r requirements.txt && pip install -e .
-      - run: python -m heart.reproduce
+      - uses: actions/checkout@v7
+      - run: pip install --no-deps -e .
+      - run: python -m heart.reproduce | tee reproduce.txt
+      - name: Reproducibility summary
+        if: always()
+        run: |
+          {
+            echo "### Reproducibility (train twice, compare)"
+            echo '```'
+            cat reproduce.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Builds the serving image with the model trained above, runs it, and checks every
-  # endpoint answers correctly. Proves the container works in isolation.
+  # endpoint. On main, pushes it to GHCR so it can be pulled and deployed.
   api-image:
+    name: API image
     needs: train
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download the trained model
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: model-${{ github.sha }}
-      - uses: docker/setup-buildx-action@v3
+      - id: name
+        run: echo "image=$(echo "$API_IMAGE" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
       - name: Build API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: serve
-          tags: heart-api:${{ github.sha }}
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          load: true # into the local Docker daemon, for the smoke test
+          tags: heart-api:test
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,scope=serve,mode=max
       - name: Start container
         run: |
-          docker run -d --name api -p 8000:8000 heart-api:${{ github.sha }}
-          for i in $(seq 1 30); do
+          docker run -d --name api -p 8000:8000 heart-api:test
+          for _ in $(seq 1 30); do
             curl -sf localhost:8000/ready && exit 0
             sleep 1
           done
-          docker logs api; exit 1
+          docker logs api
+          exit 1
       - name: Smoke test
         run: |
           set -euo pipefail
@@ -133,6 +237,31 @@ jobs:
             -H 'Content-Type: application/json' -d '{"age": 500}')
           test "$code" = 422
           curl -sf localhost:8000/metrics | grep -q heart_predictions_total
+          test "$(docker inspect api --format '{{.Config.User}}')" = app
       - name: Container logs
         if: always()
         run: docker logs api 2>&1 | tail -50
+
+      # Publish only from main (not from pull requests)
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push API image
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          image="${{ steps.name.outputs.image }}"
+          for tag in "${GITHUB_SHA::12}" latest; do
+            docker tag heart-api:test "$image:$tag"
+            docker push "$image:$tag"
+          done
+          {
+            echo "### API image published"
+            echo '```'
+            echo "docker pull $image:${GITHUB_SHA::12}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

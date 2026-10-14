@@ -15,6 +15,8 @@ NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-heart-notebooks:latest}"
 SERVE_IMAGE="${SERVE_IMAGE:-heart-api:latest}"
 API_PORT="${API_PORT:-8000}"
 API_CONTAINER="${API_CONTAINER:-heart-api}"
+# Published by CI (Phase 6). TAG=<12-char commit sha> pins a specific build.
+REGISTRY_IMAGE="${REGISTRY_IMAGE:-ghcr.io/i-am-darshil/heart-disease-api}"
 MLFLOW_PORT="${MLFLOW_PORT:-5050}"
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 JUPYTER_TOKEN="${JUPYTER_TOKEN:-heart}"
@@ -227,6 +229,21 @@ api_stop() {
     fi
 }
 
+pull() {
+    local tag="${1:-${TAG:-latest}}"
+    local remote="$REGISTRY_IMAGE:$tag"
+    step "Pulling $remote (built and smoke-tested by CI)"
+    if ! "${DOCKER[@]}" pull "$remote"; then
+        die "Could not pull $remote. Check the tag on the repo's Packages page, or that CI has run on main."
+    fi
+    "${DOCKER[@]}" tag "$remote" "$SERVE_IMAGE"
+    local version
+    version=$("${DOCKER[@]}" run --rm --entrypoint python "$SERVE_IMAGE" -c \
+        "import json; m=json.load(open('/app/models/model_metadata.json')); print(m['model_version'], m['estimator'], round(m['decision_threshold'], 4))")
+    ok "Pulled and tagged as $SERVE_IMAGE (model: $version)"
+    printf '  Start it: ./run.sh serve\n'
+}
+
 reset_mlflow() {
     step "Deleting the local MLflow store (mlflow.db, mlartifacts/)"
     rm -rf "$PROJECT_DIR/mlflow.db" "$PROJECT_DIR/mlartifacts"
@@ -267,6 +284,7 @@ ${BOLD}Pipeline steps${RESET}
 ${BOLD}API (Phase 5)${RESET}
   serve-build  Build the slim API image with the trained model baked in
   serve        Start the API container on http://127.0.0.1:$API_PORT (docs at /docs)
+  pull [tag]   Download the CI-built API image from GHCR instead of building it
   api-test     Send example requests to the running API
   api-logs     Follow the API's JSON request logs (Ctrl+C to stop following)
   api-stop     Stop the API container
@@ -308,6 +326,7 @@ main() {
         jupyter) jupyter_lab ;;
         serve-build) serve_build ;;
         serve) serve ;;
+        pull) pull "${1:-}" ;;
         api-test) api_test ;;
         api-logs) api_logs ;;
         api-stop) api_stop ;;
