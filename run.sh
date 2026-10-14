@@ -14,6 +14,7 @@ IMAGE="${IMAGE:-heart-pipeline:latest}"
 NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-heart-notebooks:latest}"
 MLFLOW_PORT="${MLFLOW_PORT:-5050}"
 JUPYTER_PORT="${JUPYTER_PORT:-8888}"
+JUPYTER_TOKEN="${JUPYTER_TOKEN:-heart}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -t 1 ]; then
@@ -129,12 +130,16 @@ mlflow_ui() {
 }
 
 jupyter_lab() {
-    step "Jupyter Lab on http://127.0.0.1:$JUPYTER_PORT (Ctrl+C to stop)"
-    printf '  From your laptop: ssh -N -L %s:127.0.0.1:%s <user>@<vm-host>\n' "$JUPYTER_PORT" "$JUPYTER_PORT"
-    printf '  Open the http://127.0.0.1:%s/lab?token=... link printed below.\n' "$JUPYTER_PORT"
+    # A short token you can type by hand. The port is published on localhost only
+    # (reach it through an SSH tunnel), so it doesn't need to be a long random secret.
+    local url="http://127.0.0.1:$JUPYTER_PORT/lab?token=$JUPYTER_TOKEN"
+    step "Jupyter Lab (Ctrl+C to stop)"
+    printf '  Open:              %s%s%s\n' "$BOLD" "$url" "$RESET"
+    printf '  From your laptop:  ssh -N -L %s:127.0.0.1:%s <user>@<vm-host>, then open the link above\n' \
+        "$JUPYTER_PORT" "$JUPYTER_PORT"
     EXTRA_DOCKER_ARGS=(-p "127.0.0.1:$JUPYTER_PORT:$JUPYTER_PORT")
     USE_NOTEBOOK_IMAGE=1 in_container jupyter lab --ip 0.0.0.0 --port "$JUPYTER_PORT" --no-browser \
-        --ServerApp.root_dir=/app/notebooks
+        --ServerApp.root_dir=/app/notebooks --IdentityProvider.token="$JUPYTER_TOKEN"
 }
 
 reset_mlflow() {
@@ -180,6 +185,7 @@ ${BOLD}Housekeeping${RESET}
   clean        Remove the Docker images (keeps all outputs)
 
 Ports can be changed: MLFLOW_PORT=5051 ./run.sh mlflow
+Jupyter's login token is "heart"; change it with JUPYTER_TOKEN=... ./run.sh jupyter
 EOF
 }
 
