@@ -1,7 +1,7 @@
 # Single entry point for every task. Run `make help` to list targets.
 # Each target is exactly what CI runs, so "works on my machine" == "works in CI".
 
-PYTHON  ?= python3.11
+PYTHON  ?= python3.10
 VENV    := .venv
 BIN     := $(VENV)/bin
 MLFLOW_PORT ?= 5050
@@ -16,6 +16,7 @@ help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
 setup:  ## Create venv and install all dependencies + this package (editable)
+	@$(PYTHON) -c 'import sys; assert sys.version_info[:2] == (3, 10), f"need Python 3.10, got {sys.version.split()[0]} (set PYTHON=/path/to/python3.10)"'
 	$(PYTHON) -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
 	$(BIN)/pip install -r requirements-dev.txt

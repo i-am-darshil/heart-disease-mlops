@@ -2,19 +2,20 @@ import json
 
 import numpy as np
 import pytest
+from sklearn.base import clone
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 
 from heart import evaluation, train
 from heart.config import FEATURES, MIN_CV_ROC_AUC, TARGET_RECALL
 from heart.data import load_processed
-from heart.models import Candidate, candidates
+from heart.models import Candidate, build_pipeline, candidates
 
 FAST_MODELS = [
     Candidate("dummy", DummyClassifier(strategy="stratified", random_state=0)),
     Candidate(
         "logistic_regression",
-        LogisticRegression(solver="liblinear", max_iter=1000),
+        LogisticRegression(penalty="elasticnet", solver="saga", l1_ratio=0.0, max_iter=5000),
         {"C": [0.1, 1.0]},
     ),
 ]
@@ -108,3 +109,16 @@ def test_save_figures_writes_pngs(result, tmp_path):
 def test_every_candidate_grid_matches_its_estimator():
     for c in candidates():
         assert set(c.grid) <= set(c.estimator.get_params())
+
+
+def test_logistic_regression_grid_really_switches_between_l2_and_l1():
+    """Guards against l1_ratio being silently ignored (scikit-learn < 1.8 needs elasticnet)."""
+    lr = next(c for c in candidates() if c.name == "logistic_regression")
+    df = load_processed()
+    zero_weights = {}
+    for l1_ratio in (0.0, 1.0):
+        model = build_pipeline(clone(lr.estimator).set_params(C=0.1, l1_ratio=l1_ratio))
+        model.fit(df[FEATURES], df["target"])
+        zero_weights[l1_ratio] = int((np.abs(model.named_steps["model"].coef_) < 1e-8).sum())
+    assert zero_weights[0.0] == 0  # L2 shrinks but keeps every weight
+    assert zero_weights[1.0] > 0  # L1 sets some weights to exactly zero

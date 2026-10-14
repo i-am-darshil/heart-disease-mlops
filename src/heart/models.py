@@ -30,7 +30,11 @@ def candidates() -> list[Candidate]:
         Candidate("dummy", DummyClassifier(strategy="stratified", random_state=RANDOM_STATE)),
         Candidate(
             "logistic_regression",
-            LogisticRegression(solver="liblinear", max_iter=1000, random_state=RANDOM_STATE),
+            # Elastic-net with l1_ratio in {0, 1} searches pure L2 and pure L1 in one grid.
+            # (scikit-learn 1.7 only honours l1_ratio when penalty="elasticnet".)
+            LogisticRegression(
+                penalty="elasticnet", solver="saga", max_iter=5000, random_state=RANDOM_STATE
+            ),
             {
                 # Inverse regularization strength: smaller C = simpler model
                 "C": [0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0],

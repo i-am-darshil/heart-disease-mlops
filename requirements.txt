@@ -1,11 +1,13 @@
 # Runtime dependencies: data processing, training, experiment tracking, serving.
-# Pinned exactly so every machine (laptop, CI runner, Docker) gets identical versions.
-pandas==3.0.6
-numpy==2.4.6
-scikit-learn==1.9.1
+# Pinned exactly so every machine (laptop, CI runner, Docker, the RHEL VM) gets identical
+# versions. Python 3.10 is the target: pandas 3, numpy 2.3+, scikit-learn 1.8+ and
+# matplotlib 3.11 need 3.11+, so these are the newest releases that support 3.10.
+pandas==2.3.3
+numpy==2.2.6
+scikit-learn==1.7.2
 joblib==1.6.0
 mlflow==3.17.0
-matplotlib==3.11.2
+matplotlib==3.10.9
 seaborn==0.13.2
 requests==2.34.2
 fastapi==0.143.0
