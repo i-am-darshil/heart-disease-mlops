@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# k3s puts kubectl and helm in /usr/local/bin, which isn't on every user's PATH
+export PATH="/usr/local/bin:$PATH"
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELEASE="${MONITORING_RELEASE:-monitoring}"
 NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"

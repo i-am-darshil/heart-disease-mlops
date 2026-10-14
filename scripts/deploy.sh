@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# k3s puts kubectl and helm in /usr/local/bin, which isn't on every user's PATH
+export PATH="/usr/local/bin:$PATH"
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPOSITORY="${REPOSITORY:-ghcr.io/i-am-darshil/heart-disease-api}"
 LOCAL_IMAGE="${LOCAL_IMAGE:-heart-api:latest}"
@@ -68,7 +71,7 @@ if [ "$MODE" = local ]; then
     log "Importing local image $LOCAL_IMAGE into k3s as $REPOSITORY:$TAG"
     $DOCKER tag "$LOCAL_IMAGE" "$REPOSITORY:$TAG"
     # k3s runs its own containerd, separate from Docker: hand it the image directly
-    $DOCKER save "$REPOSITORY:$TAG" | sudo k3s ctr -n k8s.io images import - >/dev/null
+    $DOCKER save "$REPOSITORY:$TAG" | sudo /usr/local/bin/k3s ctr -n k8s.io images import - >/dev/null
 elif [ -z "$TAG" ]; then
     TAG=$(resolve_latest)
     log "latest -> $TAG"

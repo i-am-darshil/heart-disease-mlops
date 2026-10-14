@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# kubectl and helm (Phase 7) live in /usr/local/bin, which isn't on every user's PATH
+export PATH="/usr/local/bin:$PATH"
+
 IMAGE="${IMAGE:-heart-pipeline:latest}"
 NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-heart-notebooks:latest}"
 SERVE_IMAGE="${SERVE_IMAGE:-heart-api:latest}"

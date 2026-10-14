@@ -10,6 +10,13 @@
 
 set -euo pipefail
 
+# The installer puts k3s, kubectl and helm in /usr/local/bin. That directory isn't on
+# every user's PATH, and sudo on RHEL never searches it (secure_path), so call k3s by
+# its full path and add the directory to this script's PATH.
+ORIGINAL_PATH="$PATH"
+export PATH="/usr/local/bin:$PATH"
+K3S=/usr/local/bin/k3s
+
 # Pinned for reproducibility: the k3s "stable" channel at the time of writing
 K3S_VERSION="${K3S_VERSION:-v1.36.5+k3s1}"
 HELM_VERSION="${HELM_VERSION:-v4.3.0}"
@@ -55,8 +62,8 @@ else
 fi
 
 step "k3s $K3S_VERSION"
-if command -v k3s >/dev/null 2>&1 && "${SUDO[@]}" systemctl is-active --quiet k3s; then
-    ok "already installed and running: $(k3s --version | head -1)"
+if [ -x "$K3S" ] && "${SUDO[@]}" systemctl is-active --quiet k3s; then
+    ok "already installed and running: $("$K3S" --version | head -1)"
 else
     # --write-kubeconfig-mode 644: let non-root users read the cluster config.
     # metrics-server stays enabled: `kubectl top` and the autoscaler (HPA) need it.
@@ -64,31 +71,40 @@ else
         INSTALL_K3S_VERSION="$K3S_VERSION" \
         INSTALL_K3S_EXEC="server --write-kubeconfig-mode=644" \
         sh -
-    ok "installed: $(k3s --version | head -1)"
+    [ -x "$K3S" ] || die "The k3s installer finished but $K3S is missing. See its output above."
+    # On a re-run the installer says "No change detected so skipping service start",
+    # which leaves a stopped k3s stopped. Start it explicitly.
+    "${SUDO[@]}" systemctl enable --now k3s
+    ok "installed: $("$K3S" --version | head -1)"
 fi
 
-step "Waiting for the node to be Ready"
+step "Waiting for the node to be Ready (up to 3 minutes)"
+node_ready() { "${SUDO[@]}" "$K3S" kubectl get nodes 2>/dev/null | grep -q " Ready"; }
 for _ in $(seq 1 90); do
-    if "${SUDO[@]}" k3s kubectl get nodes 2>/dev/null | grep -q " Ready"; then
-        break
-    fi
+    node_ready && break
     sleep 2
 done
-"${SUDO[@]}" k3s kubectl get nodes 2>/dev/null | grep -q " Ready" || die "The k3s node didn't become Ready. Check: sudo journalctl -u k3s -n 50"
+if ! node_ready; then
+    warn "The node isn't Ready. Diagnostics:"
+    "${SUDO[@]}" systemctl status k3s --no-pager -l 2>&1 | head -15 || true
+    printf '\n  Last k3s log lines:\n'
+    "${SUDO[@]}" journalctl -u k3s --no-pager -n 25 -o cat 2>&1 | sed 's/^/    /' || true
+    printf '\n  Memory: %s MB free of %s MB\n' \
+        "$(awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo)" "$mem_mb"
+    die "The k3s node didn't become Ready (diagnostics above). Full log: sudo journalctl -u k3s -n 200"
+fi
 ok "node is Ready"
 
 step "kubectl for $ME"
 mkdir -p "$HOME/.kube"
 "${SUDO[@]}" cat /etc/rancher/k3s/k3s.yaml > "$HOME/.kube/config"
 chmod 600 "$HOME/.kube/config"
-# k3s installs kubectl as a symlink to itself; make sure it's on PATH
-if ! command -v kubectl >/dev/null 2>&1; then
-    "${SUDO[@]}" ln -sf "$(command -v k3s)" /usr/local/bin/kubectl
-fi
+# k3s installs kubectl as a symlink to itself; make sure it exists
+[ -e /usr/local/bin/kubectl ] || "${SUDO[@]}" ln -sf "$K3S" /usr/local/bin/kubectl
 ok "kubectl works: $(kubectl version --client 2>/dev/null | head -1)"
 
 step "Helm $HELM_VERSION"
-if command -v helm >/dev/null 2>&1; then
+if [ -x /usr/local/bin/helm ] || command -v helm >/dev/null 2>&1; then
     ok "already installed: $(helm version --short)"
 else
     arch=$(uname -m)
@@ -114,6 +130,15 @@ kubectl -n kube-system get deploy traefik >/dev/null 2>&1 && ok "Traefik is runn
     || warn "Traefik isn't ready yet; it usually finishes within a minute. Check: kubectl -n kube-system get pods"
 
 step "Next"
+# Our own PATH has /usr/local/bin (added at the top); check what the user started with
+case ":$ORIGINAL_PATH:" in
+    *:/usr/local/bin:*) ;;
+    *)
+        warn "/usr/local/bin isn't on your PATH, so typing kubectl or helm yourself won't work."
+        printf '  Fix it once:  echo '"'"'export PATH=/usr/local/bin:$PATH'"'"' >> ~/.bashrc && source ~/.bashrc\n'
+        printf '  (./run.sh commands work either way.)\n'
+        ;;
+esac
 cat <<EOF
   ./run.sh deploy            deploy the API image CI published (latest)
   ./run.sh k8s-status        pods, services, ingress
